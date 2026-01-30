@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  bharat-biz-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: bharat-biz-agent
+    ports:
+      - "80:80"      # Frontend
+      - "3001:3001"  # Backend API
+    environment:
+      # Required: Encryption key for data security (generate with: openssl rand -hex 32)
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      
+      # WhatsApp Business API Configuration
+      # Get from: https://business.facebook.com/
+      - WHATSAPP_API_KEY=${WHATSAPP_API_KEY:-}
+      - WHATSAPP_PHONE_NUMBER_ID=${WHATSAPP_PHONE_NUMBER_ID:-}
+      - WHATSAPP_VERIFY_TOKEN=${WHATSAPP_VERIFY_TOKEN:-}
+      
+      # Telegram Bot Configuration
+      # Get from: https://t.me/BotFather
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      
+      # Database (optional - uses in-memory if not provided)
+      # - SUPABASE_URL=${SUPABASE_URL:-}
+      # - SUPABASE_KEY=${SUPABASE_KEY:-}
+      
+      - NODE_ENV=production
+      - PORT=3001
+      - FRONTEND_URL=http://localhost
+    volumes:
+      # Persist logs
+      - ./logs:/var/log/nginx
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - bharat-biz-network
+
+  # Optional: Redis for session storage
+  redis:
+    image: redis:7-alpine
+    container_name: bharat-biz-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    networks:
+      - bharat-biz-network
+
+volumes:
+  redis-data:
+
+networks:
+  bharat-biz-network:
+    driver: bridge
