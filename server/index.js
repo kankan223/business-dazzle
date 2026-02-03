@@ -10,6 +10,44 @@
  * - Audit logging for all actions
  */
 
+const fetch = (...args) =>
+  import('node-fetch').then(({ default: fetch }) => fetch(...args));
+
+
+
+
+require('dotenv').config();
+
+
+
+
+
+
+const TelegramBot = require('node-telegram-bot-api');
+
+// 🔥 CREATE TELEGRAM BOT (THIS WAS MISSING)
+const telegramBot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, {
+  polling: true
+});
+
+// DEBUG
+telegramBot.on('polling_error', (err) => {
+  console.error('🚨 Telegram polling error:', err.message);
+});
+
+telegramBot.on('message', async (msg) => {
+  console.log('📩 Telegram message received:', msg.text);
+
+  // Reuse your existing handler
+  await handleTelegramMessage(msg, 'telegram-polling');
+});
+
+
+if (!process.env.TELEGRAM_BOT_TOKEN) {
+  throw new Error("❌ TELEGRAM_BOT_TOKEN missing in .env");
+}
+
+
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -420,38 +458,39 @@ async function sendWhatsAppMessage(to, message) {
 
 // ==================== TELEGRAM BOT HANDLERS ====================
 
-// Telegram Webhook
-app.post('/webhooks/telegram', async (req, res) => {
-  try {
-    const update = req.body;
+// Telegram Webhook  (webhook need HTTPS + setWebhook. and polling and webhoook cannot coexist..   will be used for production)
+
+// app.post('/webhooks/telegram', async (req, res) => {
+//   try {
+//     const update = req.body;
     
-    logSecurityEvent('Telegram Webhook Received', 'system', req.ip, 'info', `Update ID: ${update.update_id}`);
+//     logSecurityEvent('Telegram Webhook Received', 'system', req.ip, 'info', `Update ID: ${update.update_id}`);
     
-    if (update.message) {
-      await handleTelegramMessage(update.message, req.ip);
-    } else if (update.callback_query) {
-      await handleTelegramCallback(update.callback_query, req.ip);
-    }
+//     if (update.message) {
+//       await handleTelegramMessage(update.message, req.ip);
+//     } else if (update.callback_query) {
+//       await handleTelegramCallback(update.callback_query, req.ip);
+//     }
     
-    res.sendStatus(200);
-  } catch (error) {
-    console.error('❌ Telegram webhook error:', error);
-    logSecurityEvent('Telegram Webhook Error', 'system', req.ip, 'critical', error.message);
-    res.sendStatus(500);
-  }
-});
+//     res.sendStatus(200);
+//   } catch (error) {
+//     console.error('❌ Telegram webhook error:', error);
+//     logSecurityEvent('Telegram Webhook Error', 'system', req.ip, 'critical', error.message);
+//     res.sendStatus(500);
+//   }
+// });
 
 async function handleTelegramMessage(message, clientIp) {
   const chatId = message.chat.id;
   const from = message.from;
   const messageId = message.message_id;
-  
+
   console.log(`📱 Telegram message from ${from.username || from.first_name}`);
-  
+
   let content = '';
   let mediaUrl = null;
   let messageType = 'text';
-  
+
   if (message.text) {
     content = message.text;
   } else if (message.voice) {
@@ -471,11 +510,9 @@ async function handleTelegramMessage(message, clientIp) {
     messageType = 'document';
     mediaUrl = message.document.file_id;
   }
-  
-  // Detect language
+
   const language = detectLanguage(content);
-  
-  // Store conversation
+
   if (!botConversations.has(chatId)) {
     botConversations.set(chatId, {
       customerPhone: chatId,
@@ -483,10 +520,10 @@ async function handleTelegramMessage(message, clientIp) {
       platform: 'telegram',
       messages: [],
       context: {},
-      language: language
+      language
     });
   }
-  
+
   const conversation = botConversations.get(chatId);
   conversation.messages.push({
     id: messageId,
@@ -497,41 +534,50 @@ async function handleTelegramMessage(message, clientIp) {
     messageType,
     language
   });
-  
-  // Process with AI/Bot logic
+
   const response = await processBotResponse(content, conversation, 'telegram', language);
-  
-  // Check if approval needed
+
   if (response.requiresApproval) {
     const approvalId = `app-${Date.now()}`;
     const bot = botInstances.get('bot-2');
-    
+
     pendingApprovals.set(approvalId, {
       id: approvalId,
       botId: 'bot-2',
       botName: bot?.name || 'Support Bot',
-      customerPhone: chatId.toString(),
+      chatId,
+      platform: 'telegram',
+      language,
       customerName: from.first_name,
       action: response.action,
       details: response.details,
       requestedAt: new Date(),
       priority: response.priority || 'medium',
-      status: 'pending',
-      platform: 'telegram'
+      status: 'pending'
     });
-    
-    // Update bot pending count
+
     if (bot) {
       bot.pendingApprovals = (bot.pendingApprovals || 0) + 1;
     }
-    
-    logSecurityEvent('Approval Request Created', 'bot-2', clientIp, 'info', `${response.action} for ${chatId}`);
-    
+
+    logSecurityEvent(
+      'Approval Request Created',
+      'bot-2',
+      clientIp,
+      'info',
+      `${response.action} for ${chatId}`
+    );
+
     await sendTelegramMessage(chatId, translations[language].approvalPending);
   } else {
-    await sendTelegramMessage(chatId, response.message.text?.body || response.message, response.message.options);
+    await sendTelegramMessage(
+      chatId,
+      response.message?.text?.body || response.message
+    );
   }
 }
+
+
 
 async function handleTelegramCallback(callbackQuery, clientIp) {
   const chatId = callbackQuery.message.chat.id;
@@ -570,7 +616,7 @@ async function sendTelegramMessage(chatId, text, options = {}) {
       body: JSON.stringify({
         chat_id: chatId,
         text: text,
-        parse_mode: options.parse_mode || 'HTML',
+        parse_mode: options?.parse_mode ?? undefined,
         reply_markup: options.reply_markup,
         ...options
       })
@@ -613,7 +659,7 @@ async function processBotResponse(input, conversation, platform, language = 'en'
   const t = translations[language];
   
   // Greeting
-  if (lowerInput.match(/^(hi|hello|namaste|namaskar|hey|start|/start)/)) {
+  if (lowerInput.match(/^(hi|hello|namaste|namaskar|hey|start|\/start)/)) {
     return {
       message: { text: { body: t.greeting } }
     };

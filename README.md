@@ -2,7 +2,7 @@
 
 **AI-Powered Business Assistant for Indian SMBs with WhatsApp & Telegram Bot Integration**
 
-[![Docker](https://img.shields.io/badge/Docker-Ready-blue)](https://docker.com)
+[![Docker](c)](https://docker.com)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
 ## 📋 Overview
@@ -22,8 +22,8 @@ Bharat Biz-Agent is a comprehensive business automation platform designed specif
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/your-org/bharat-biz-agent.git
-cd bharat-biz-agent
+git clone https://github.com/kankan223/business-dazzle.git
+cd business-dazzle
 
 # 2. Copy environment file
 cp .env.example .env
