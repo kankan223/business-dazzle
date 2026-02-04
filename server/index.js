@@ -13,39 +13,7 @@
 const fetch = (...args) =>
   import('node-fetch').then(({ default: fetch }) => fetch(...args));
 
-
-
-
 require('dotenv').config();
-
-
-
-
-
-
-const TelegramBot = require('node-telegram-bot-api');
-
-// 🔥 CREATE TELEGRAM BOT (THIS WAS MISSING)
-const telegramBot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, {
-  polling: true
-});
-
-// DEBUG
-telegramBot.on('polling_error', (err) => {
-  console.error('🚨 Telegram polling error:', err.message);
-});
-
-telegramBot.on('message', async (msg) => {
-  console.log('📩 Telegram message received:', msg.text);
-
-  // Reuse your existing handler
-  await handleTelegramMessage(msg, 'telegram-polling');
-});
-
-
-if (!process.env.TELEGRAM_BOT_TOKEN) {
-  throw new Error("❌ TELEGRAM_BOT_TOKEN missing in .env");
-}
 
 
 const express = require('express');
@@ -58,6 +26,115 @@ const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+
+const TelegramBot = require('node-telegram-bot-api');
+
+// 🔥 CREATE TELEGRAM BOT (safe for dev + test)
+const telegramBot = new TelegramBot(
+  process.env.TELEGRAM_BOT_TOKEN,
+  {
+    polling: process.env.NODE_ENV !== 'test'
+  }
+);
+
+
+
+telegramBot.on('message', async (msg) => {
+  try {
+    // 1️⃣ Validate
+    if (!validateTelegramMessage(msg)) return;
+
+    const userId = msg.from.id;
+    const chatId = msg.chat.id;
+
+    // 2️⃣ Rate limit
+    if (isTelegramRateLimited(userId)) {
+      return telegramBot.sendMessage(chatId, "⏳ Please slow down a bit.");
+    }
+
+    // 3️⃣ Hard approval lock
+    const lockedApproval = [...pendingApprovals.values()].find(
+      a =>
+        a.platform === 'telegram' &&
+        a.chatId === chatId &&
+        a.status === 'pending' &&
+        a.locked === true
+    );
+
+    if (lockedApproval) {
+      return telegramBot.sendMessage(
+        chatId,
+        "⏳ Your previous request is still awaiting admin approval."
+      );
+    }
+
+    // 4️⃣ Forward sanitized message
+    await handleTelegramMessage(msg, 'telegram');
+
+  } catch (err) {
+    console.error("🚨 Telegram handler error:", err);
+  }
+});
+
+
+
+
+telegramBot.on('polling_error', (err) => {
+  if (process.env.NODE_ENV !== 'test') {
+    console.error('🚨 Telegram polling error:', err.message);
+  }
+});
+
+
+
+if (!process.env.TELEGRAM_BOT_TOKEN) {
+  throw new Error("❌ TELEGRAM_BOT_TOKEN missing in .env");
+}
+
+
+// ==================== TELEGRAM INPUT VALIDATION ====================
+
+function validateTelegramMessage(msg) {
+  // Basic shape check
+  if (!msg || !msg.from || !msg.chat) return false;
+
+  // Ignore bot messages
+  if (msg.from.is_bot) return false;
+
+  // Only allow text messages for now
+  if (typeof msg.text !== 'string') return false;
+
+  // Trim & length guard (prevents memory abuse)
+  const text = msg.text.trim();
+  if (text.length === 0) return false;
+  if (text.length > 500) return false;
+
+  // Block control / weird unicode spam
+  const unsafePattern = /[\u0000-\u001F\u007F]/;
+  if (unsafePattern.test(text)) return false;
+
+  return true;
+}
+
+// ==================== TELEGRAM RATE LIMITING ====================
+
+const telegramUserRateLimit = new Map();
+
+// Allow 1 message per second per user
+ 
+function isTelegramRateLimited(userId) {
+  const now = Date.now();
+  const last = telegramUserRateLimit.get(userId) || 0;
+
+  if (now - last < 1000) {
+    return true;
+  }
+
+  telegramUserRateLimit.set(userId, now);
+  return false;
+}
+
 
 // ==================== SECURITY MIDDLEWARE ====================
 
@@ -542,19 +619,21 @@ async function handleTelegramMessage(message, clientIp) {
     const bot = botInstances.get('bot-2');
 
     pendingApprovals.set(approvalId, {
-      id: approvalId,
-      botId: 'bot-2',
-      botName: bot?.name || 'Support Bot',
-      chatId,
-      platform: 'telegram',
-      language,
-      customerName: from.first_name,
-      action: response.action,
-      details: response.details,
-      requestedAt: new Date(),
-      priority: response.priority || 'medium',
-      status: 'pending'
-    });
+    id: approvalId,
+    botId: 'bot-2',
+    botName: bot?.name || 'Support Bot',
+    chatId,
+    platform: 'telegram',
+    language,
+    customerName: from.first_name,
+    action: response.action,
+    details: response.details,
+    requestedAt: new Date(),
+    priority: response.priority || 'medium',
+    status: 'pending',
+    locked: true // 🔒 THIS WAS MISSING
+  });
+
 
     if (bot) {
       bot.pendingApprovals = (bot.pendingApprovals || 0) + 1;
@@ -853,6 +932,22 @@ function authenticateAdmin(req, res, next) {
   next();
 }
 
+// ==================== TEST-ONLY SEED ENDPOINT ====================
+
+if (process.env.NODE_ENV === 'test') {
+  app.post('/api/approvals/seed', (req, res) => {
+    const approval = {
+      ...req.body,
+      status: 'pending',
+      requestedAt: new Date(),
+    };
+
+    pendingApprovals.set(approval.id, approval);
+    res.status(200).json({ success: true, approval });
+  });
+}
+
+
 // Get pending approvals
 app.get('/api/approvals', (req, res) => {
   const approvals = Array.from(pendingApprovals.values());
@@ -870,6 +965,7 @@ app.post('/api/approvals/:id', async (req, res) => {
   }
   
   approval.status = approved ? 'approved' : 'rejected';
+  approval.locked = false;
   approval.resolvedAt = new Date();
   approval.resolvedBy = adminId;
   
@@ -895,10 +991,17 @@ app.post('/api/approvals/:id', async (req, res) => {
     : translations[language].approvalRejected;
   
   if (approval.platform === 'whatsapp') {
-    await sendWhatsAppMessage(approval.customerPhone, { text: { body: message } });
-  } else {
-    await sendTelegramMessage(approval.customerPhone, message);
+    await sendWhatsAppMessage(
+      approval.customerPhone,
+      { text: { body: message } }
+    );
+  } else if (approval.platform === 'telegram') {
+    await sendTelegramMessage(
+      approval.chatId,
+      message
+    );
   }
+
   
   res.json({ success: true, approval });
 });
@@ -1009,10 +1112,26 @@ app.use((req, res) => {
   res.status(404).json({ error: 'Not found' });
 });
 
+// ==================== TEST SEED ENDPOINT ====================
+
+if (process.env.NODE_ENV === 'test') {
+  app.post('/api/approvals/seed', (req, res) => {
+    const approval = {
+      ...req.body,
+      status: 'pending',
+      requestedAt: new Date(),
+    };
+
+    pendingApprovals.set(approval.id, approval);
+    res.json({ success: true, approval });
+  });
+}
+
 // ==================== START SERVER ====================
 
-app.listen(PORT, () => {
-  console.log(`
+if (process.env.NODE_ENV !== 'test') {
+  app.listen(PORT, () => {
+    console.log(`
 ╔══════════════════════════════════════════════════════════╗
 ║          Bharat Biz-Agent - Bot Server                   ║
 ║                                                          ║
@@ -1024,9 +1143,17 @@ app.listen(PORT, () => {
 ║  🌐 Server:        http://localhost:${PORT}              ║
 ║  💚 Health:        http://localhost:${PORT}/health       ║
 ╚══════════════════════════════════════════════════════════╝
-  `);
-  
-  logSecurityEvent('Server Started', 'system', 'internal', 'info', `Server listening on port ${PORT}`);
-});
+    `);
+
+    logSecurityEvent(
+      'Server Started',
+      'system',
+      'internal',
+      'info',
+      `Server listening on port ${PORT}`
+    );
+  });
+}
 
 module.exports = app;
+

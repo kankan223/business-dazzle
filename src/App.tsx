@@ -1,4 +1,6 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
+import { getTimeAgo } from '@/hooks/use-time-ago';
+import { SidebarItem } from '@/components/sidebar-item';
 import {
   Bot, MessageSquare, FileText, Package, Shield, Bell,
   Settings, BarChart3, CheckCircle, XCircle,
@@ -23,6 +25,8 @@ import { toast } from 'sonner';
 import { Toaster } from '@/components/ui/sonner';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import './App.css';
+import { useEffect } from 'react';
+import { useRef } from 'react';
 
 // ==================== TYPES ====================
 
@@ -35,7 +39,7 @@ interface BotInstance {
   apiKey: string;
   connectedCustomers: number;
   pendingApprovals: number;
-  lastActivity: Date;
+  lastActivity: string;
   encryptionEnabled: boolean;
   autoApproveThreshold: number;
   voiceEnabled: boolean;
@@ -48,11 +52,16 @@ interface PendingApproval {
   customerName: string;
   customerPhone: string;
   action: 'generate_invoice' | 'process_payment' | 'update_inventory' | 'share_data' | 'refund';
-  details: any;
-  requestedAt: Date;
+  details: {
+    amount?: number;
+    items?: string[];
+    reason?: string;
+    [key: string]: unknown;
+  };
+  requestedAt: string;
   priority: 'low' | 'medium' | 'high' | 'urgent';
   status: 'pending' | 'approved' | 'rejected';
-  resolvedAt?: Date;
+  resolvedAt?: string;
   resolvedBy?: string;
 }
 
@@ -64,7 +73,7 @@ interface CustomerConversation {
   botName: string;
   platform: 'whatsapp' | 'telegram';
   messages: Message[];
-  lastMessageAt: Date;
+  lastMessageAt: string;
   status: 'active' | 'closed' | 'waiting_approval';
   tags: string[];
 }
@@ -73,7 +82,7 @@ interface Message {
   id: string;
   type: 'customer' | 'bot' | 'admin' | 'system';
   content: string;
-  timestamp: Date;
+  timestamp: string;
   mediaUrl?: string;
   requiresApproval?: boolean;
   translated?: boolean;
@@ -89,7 +98,7 @@ interface Order {
   total: number;
   gstAmount: number;
   status: 'pending' | 'confirmed' | 'processing' | 'shipped' | 'delivered' | 'cancelled';
-  createdAt: Date;
+  createdAt: string;
   botHandled: boolean;
   invoiceGenerated?: boolean;
 }
@@ -110,7 +119,7 @@ interface SecurityLog {
   event: string;
   user: string;
   ip: string;
-  timestamp: Date;
+  timestamp: string;
   severity: 'info' | 'warning' | 'critical';
   details: string;
 }
@@ -130,15 +139,15 @@ function detectLanguage(text: string): 'en' | 'hi' | 'hinglish' {
 // ==================== MOCK DATA ====================
 
 const mockBots: BotInstance[] = [
-  { id: 'bot-1', name: 'Sales Bot - Primary', platform: 'whatsapp', status: 'active', phoneNumber: '+91-98765-43210', apiKey: 'wa_api_****1234', connectedCustomers: 156, pendingApprovals: 3, lastActivity: new Date(), encryptionEnabled: true, autoApproveThreshold: 5000, voiceEnabled: true },
-  { id: 'bot-2', name: 'Support Bot', platform: 'telegram', status: 'active', apiKey: 'tg_api_****5678', connectedCustomers: 89, pendingApprovals: 1, lastActivity: new Date(Date.now() - 1000 * 60 * 5), encryptionEnabled: true, autoApproveThreshold: 10000, voiceEnabled: true },
-  { id: 'bot-3', name: 'Order Bot', platform: 'whatsapp', status: 'paused', phoneNumber: '+91-98765-43211', apiKey: 'wa_api_****9012', connectedCustomers: 45, pendingApprovals: 0, lastActivity: new Date(Date.now() - 1000 * 60 * 30), encryptionEnabled: false, autoApproveThreshold: 3000, voiceEnabled: false },
+  { id: 'bot-1', name: 'Sales Bot - Primary', platform: 'whatsapp', status: 'active', phoneNumber: '+91-98765-43210', apiKey: 'wa_api_****1234', connectedCustomers: 156, pendingApprovals: 3, lastActivity: new Date().toISOString(), encryptionEnabled: true, autoApproveThreshold: 5000, voiceEnabled: true },
+  { id: 'bot-2', name: 'Support Bot', platform: 'telegram', status: 'active', apiKey: 'tg_api_****5678', connectedCustomers: 89, pendingApprovals: 1, lastActivity: new Date(Date.now() - 1000 * 60 * 5).toISOString(), encryptionEnabled: true, autoApproveThreshold: 10000, voiceEnabled: true },
+  { id: 'bot-3', name: 'Order Bot', platform: 'whatsapp', status: 'paused', phoneNumber: '+91-98765-43211', apiKey: 'wa_api_****9012', connectedCustomers: 45, pendingApprovals: 0, lastActivity: new Date(Date.now() - 1000 * 60 * 30).toISOString(), encryptionEnabled: false, autoApproveThreshold: 3000, voiceEnabled: false },
 ];
 
 const mockApprovals: PendingApproval[] = [
-  { id: 'app-1', botId: 'bot-1', botName: 'Sales Bot - Primary', customerName: 'Rahul Sharma', customerPhone: '+91-98765-11111', action: 'generate_invoice', details: { amount: 15400, items: ['Rice 100kg', 'Sugar 50kg'] }, requestedAt: new Date(Date.now() - 1000 * 60 * 10), priority: 'medium', status: 'pending' },
-  { id: 'app-2', botId: 'bot-1', botName: 'Sales Bot - Primary', customerName: 'Priya Patel', customerPhone: '+91-98765-22222', action: 'process_payment', details: { amount: 8500, method: 'UPI' }, requestedAt: new Date(Date.now() - 1000 * 60 * 5), priority: 'high', status: 'pending' },
-  { id: 'app-3', botId: 'bot-2', botName: 'Support Bot', customerName: 'Amit Kumar', customerPhone: '+91-98765-33333', action: 'share_data', details: { dataType: 'order_history', reason: 'Customer dispute' }, requestedAt: new Date(Date.now() - 1000 * 60 * 2), priority: 'urgent', status: 'pending' },
+  { id: 'app-1', botId: 'bot-1', botName: 'Sales Bot - Primary', customerName: 'Rahul Sharma', customerPhone: '+91-98765-11111', action: 'generate_invoice', details: { amount: 15400, items: ['Rice 100kg', 'Sugar 50kg'] }, requestedAt: new Date(Date.now() - 1000 * 60 * 10).toISOString(), priority: 'medium', status: 'pending' },
+  { id: 'app-2', botId: 'bot-1', botName: 'Sales Bot - Primary', customerName: 'Priya Patel', customerPhone: '+91-98765-22222', action: 'process_payment', details: { amount: 8500, method: 'UPI' }, requestedAt: new Date(Date.now() - 1000 * 60 * 5).toISOString(), priority: 'high', status: 'pending' },
+  { id: 'app-3', botId: 'bot-2', botName: 'Support Bot', customerName: 'Amit Kumar', customerPhone: '+91-98765-33333', action: 'share_data', details: { dataType: 'order_history', reason: 'Customer dispute' }, requestedAt: new Date(Date.now() - 1000 * 60 * 2).toISOString(), priority: 'urgent', status: 'pending' },
 ];
 
 const mockConversations: CustomerConversation[] = [
@@ -150,12 +159,12 @@ const mockConversations: CustomerConversation[] = [
     botName: 'Sales Bot - Primary',
     platform: 'whatsapp',
     messages: [
-      { id: 'm1', type: 'customer', content: 'Namaste, mujhe 100kg chawal chahiye', timestamp: new Date(Date.now() - 1000 * 60 * 30), language: 'hinglish' },
-      { id: 'm2', type: 'bot', content: 'Namaste Rahul ji! 100kg Basmati Rice ka rate ₹120/kg hai. Total ₹12,000 + GST. Kya confirm karna hai?', timestamp: new Date(Date.now() - 1000 * 60 * 29), language: 'hinglish' },
-      { id: 'm3', type: 'customer', content: 'Haan bhej do, aur 50kg cheeni bhi', timestamp: new Date(Date.now() - 1000 * 60 * 25), language: 'hinglish' },
-      { id: 'm4', type: 'system', content: '⚠️ Admin approval required for invoice ₹15,400', timestamp: new Date(Date.now() - 1000 * 60 * 24), requiresApproval: true },
+      { id: 'm1', type: 'customer', content: 'Namaste, mujhe 100kg chawal chahiye', timestamp: new Date(Date.now() - 1000 * 60 * 30).toISOString(), language: 'hinglish' },
+      { id: 'm2', type: 'bot', content: 'Namaste Rahul ji! 100kg Basmati Rice ka rate ₹120/kg hai. Total ₹12,000 + GST. Kya confirm karna hai?', timestamp: new Date(Date.now() - 1000 * 60 * 29).toISOString(), language: 'hinglish' },
+      { id: 'm3', type: 'customer', content: 'Haan bhej do, aur 50kg cheeni bhi', timestamp: new Date(Date.now() - 1000 * 60 * 25).toISOString(), language: 'hinglish' },
+      { id: 'm4', type: 'system', content: '⚠️ Admin approval required for invoice ₹15,400', timestamp: new Date(Date.now() - 1000 * 60 * 24).toISOString(), requiresApproval: true },
     ],
-    lastMessageAt: new Date(Date.now() - 1000 * 60 * 24),
+    lastMessageAt: new Date(Date.now() - 1000 * 60 * 24).toISOString(),
     status: 'waiting_approval',
     tags: ['order', 'pending-approval']
   },
@@ -167,11 +176,11 @@ const mockConversations: CustomerConversation[] = [
     botName: 'Sales Bot - Primary',
     platform: 'whatsapp',
     messages: [
-      { id: 'm1', type: 'customer', content: 'Mera payment status kya hai?', timestamp: new Date(Date.now() - 1000 * 60 * 15), language: 'hinglish' },
-      { id: 'm2', type: 'bot', content: 'Priya ji, aapka ₹8,500 payment pending hai. Due date 15 Jan 2024. Payment karna hai?', timestamp: new Date(Date.now() - 1000 * 60 * 14), language: 'hinglish' },
-      { id: 'm3', type: 'customer', content: 'Haan abhi karta hoon UPI se', timestamp: new Date(Date.now() - 1000 * 60 * 10), language: 'hinglish' },
+      { id: 'm1', type: 'customer', content: 'Mera payment status kya hai?', timestamp: new Date(Date.now() - 1000 * 60 * 15).toISOString(), language: 'hinglish' },
+      { id: 'm2', type: 'bot', content: 'Priya ji, aapka ₹8,500 payment pending hai. Due date 15 Jan 2024. Payment karna hai?', timestamp: new Date(Date.now() - 1000 * 60 * 14).toISOString(), language: 'hinglish' },
+      { id: 'm3', type: 'customer', content: 'Haan abhi karta hoon UPI se', timestamp: new Date(Date.now() - 1000 * 60 * 10).toISOString(), language: 'hinglish' },
     ],
-    lastMessageAt: new Date(Date.now() - 1000 * 60 * 10),
+    lastMessageAt: new Date(Date.now() - 1000 * 60 * 10).toISOString(),
     status: 'active',
     tags: ['payment', 'upi']
   },
@@ -183,19 +192,19 @@ const mockConversations: CustomerConversation[] = [
     botName: 'Support Bot',
     platform: 'telegram',
     messages: [
-      { id: 'm1', type: 'customer', content: 'नमस्ते, चावल का रेट बताइए', timestamp: new Date(Date.now() - 1000 * 60 * 45), language: 'hi' },
-      { id: 'm2', type: 'bot', content: 'नमस्ते सुनीता जी! चावल (बासमती) की कीमत ₹120 प्रति किलो है। और जानकारी चाहिए?', timestamp: new Date(Date.now() - 1000 * 60 * 44), language: 'hi', translated: true },
+      { id: 'm1', type: 'customer', content: 'नमस्ते, चावल का रेट बताइए', timestamp: new Date(Date.now() - 1000 * 60 * 45).toISOString(), language: 'hi' },
+      { id: 'm2', type: 'bot', content: 'नमस्ते सुनीता जी! चावल (बासमती) की कीमत ₹120 प्रति किलो है। और जानकारी चाहिए?', timestamp: new Date(Date.now() - 1000 * 60 * 44).toISOString(), language: 'hi', translated: true },
     ],
-    lastMessageAt: new Date(Date.now() - 1000 * 60 * 44),
+    lastMessageAt: new Date(Date.now() - 1000 * 60 * 44).toISOString(),
     status: 'active',
     tags: ['price-inquiry']
   },
 ];
 
 const mockOrders: Order[] = [
-  { id: 'ORD-001', customerName: 'Rahul Sharma', customerPhone: '+91-98765-11111', items: [{ name: 'Rice (Basmati)', quantity: 100, price: 120 }, { name: 'Sugar', quantity: 50, price: 42 }], total: 14100, gstAmount: 1300, status: 'pending', createdAt: new Date(Date.now() - 1000 * 60 * 60), botHandled: true, invoiceGenerated: false },
-  { id: 'ORD-002', customerName: 'Priya Patel', customerPhone: '+91-98765-22222', items: [{ name: 'Wheat Flour', quantity: 150, price: 45 }], total: 6750, gstAmount: 750, status: 'confirmed', createdAt: new Date(Date.now() - 1000 * 60 * 60 * 2), botHandled: true, invoiceGenerated: true },
-  { id: 'ORD-003', customerName: 'Amit Kumar', customerPhone: '+91-98765-33333', items: [{ name: 'Cooking Oil', quantity: 20, price: 180 }], total: 3600, gstAmount: 400, status: 'processing', createdAt: new Date(Date.now() - 1000 * 60 * 60 * 5), botHandled: false, invoiceGenerated: true },
+  { id: 'ORD-001', customerName: 'Rahul Sharma', customerPhone: '+91-98765-11111', items: [{ name: 'Rice (Basmati)', quantity: 100, price: 120 }, { name: 'Sugar', quantity: 50, price: 42 }], total: 14100, gstAmount: 1300, status: 'pending', createdAt: new Date(Date.now() - 1000 * 60 * 60).toISOString(), botHandled: true, invoiceGenerated: false },
+  { id: 'ORD-002', customerName: 'Priya Patel', customerPhone: '+91-98765-22222', items: [{ name: 'Wheat Flour', quantity: 150, price: 45 }], total: 6750, gstAmount: 750, status: 'confirmed', createdAt: new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString(), botHandled: true, invoiceGenerated: true },
+  { id: 'ORD-003', customerName: 'Amit Kumar', customerPhone: '+91-98765-33333', items: [{ name: 'Cooking Oil', quantity: 20, price: 180 }], total: 3600, gstAmount: 400, status: 'processing', createdAt: new Date(Date.now() - 1000 * 60 * 60 * 5).toISOString(), botHandled: false, invoiceGenerated: true },
 ];
 
 const mockInventory: InventoryItem[] = [
@@ -206,10 +215,10 @@ const mockInventory: InventoryItem[] = [
 ];
 
 const mockSecurityLogs: SecurityLog[] = [
-  { id: 'log-1', event: 'Bot API Key Rotated', user: 'admin@bharatbiz.com', ip: '203.192.12.45', timestamp: new Date(Date.now() - 1000 * 60 * 60), severity: 'info', details: 'WhatsApp bot API key rotated successfully' },
-  { id: 'log-2', event: 'Failed Login Attempt', user: 'unknown', ip: '185.220.101.33', timestamp: new Date(Date.now() - 1000 * 60 * 30), severity: 'warning', details: '3 failed login attempts from unknown IP' },
-  { id: 'log-3', event: 'Data Export Request', user: 'admin@bharatbiz.com', ip: '203.192.12.45', timestamp: new Date(Date.now() - 1000 * 60 * 15), severity: 'info', details: 'Customer data export approved and downloaded' },
-  { id: 'log-4', event: 'Suspicious Activity', user: 'bot-2', ip: 'internal', timestamp: new Date(Date.now() - 1000 * 60 * 5), severity: 'critical', details: 'Unusual pattern detected in message volume' },
+  { id: 'log-1', event: 'Bot API Key Rotated', user: 'admin@bharatbiz.com', ip: '203.192.12.45', timestamp: new Date(Date.now() - 1000 * 60 * 60).toISOString(), severity: 'info', details: 'WhatsApp bot API key rotated successfully' },
+  { id: 'log-2', event: 'Failed Login Attempt', user: 'unknown', ip: '185.220.101.33', timestamp: new Date(Date.now() - 1000 * 60 * 30).toISOString(), severity: 'warning', details: '3 failed login attempts from unknown IP' },
+  { id: 'log-3', event: 'Data Export Request', user: 'admin@bharatbiz.com', ip: '203.192.12.45', timestamp: new Date(Date.now() - 1000 * 60 * 15).toISOString(), severity: 'info', details: 'Customer data export approved and downloaded' },
+  { id: 'log-4', event: 'Suspicious Activity', user: 'bot-2', ip: 'internal', timestamp: new Date(Date.now() - 1000 * 60 * 5).toISOString(), severity: 'critical', details: 'Unusual pattern detected in message volume' },
 ];
 
 const chartData = [
@@ -254,9 +263,37 @@ function App() {
   const [showProductDialog, setShowProductDialog] = useState(false);
   const [autoApproveEnabled, setAutoApproveEnabled] = useState(false);
   const [autoApproveThreshold, setAutoApproveThreshold] = useState(5000);
+  const [processingApprovalId, setProcessingApprovalId] = useState<string | null>(null);
+
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [selectedConversation]);
+  
+
+  useEffect(() => {
+    fetch('/api/approvals')
+      .then(res => res.json())
+      .then(data => setApprovals(data))
+      .catch((error) => console.error('Error fetching approvals:', error));
+  }, []);
+
+  useEffect(() => {
+    const closeDialogs = () => {
+      setShowApprovalDialog(false);
+      setShowBotConfig(false);
+      setShowAddBotDialog(false);
+      setShowOrderDialog(false);
+      setShowProductDialog(false);
+      setSelectedApproval(null);
+      setSelectedBot(null);
+    };
+    closeDialogs();
+  }, [activeTab]);
 
   // Stats calculation
-  const stats = {
+  const stats = useMemo(() => ({
     totalBots: bots.length,
     activeBots: bots.filter(b => b.status === 'active').length,
     pendingApprovals: approvals.filter(a => a.status === 'pending').length,
@@ -264,42 +301,57 @@ function App() {
     totalMessages: conversations.reduce((sum, c) => sum + c.messages.length, 0),
     botHandledOrders: orders.filter(o => o.botHandled).length,
     totalRevenue: orders.reduce((sum, o) => sum + o.total + o.gstAmount, 0),
-  };
+  }), [bots, approvals, conversations, orders]);
+
 
   // Handle approval with notification
-  const handleApproval = useCallback((approvalId: string, approved: boolean) => {
-    const approval = approvals.find(a => a.id === approvalId);
-    if (!approval) return;
+  const handleApproval = useCallback(async (approvalId: string, approved: boolean) => {
+  if (processingApprovalId) return;
+  setProcessingApprovalId(approvalId);
 
-    setApprovals(prev => prev.map(a => 
-      a.id === approvalId ? { 
-        ...a, 
-        status: approved ? 'approved' : 'rejected',
-        resolvedAt: new Date(),
-        resolvedBy: 'admin@bharatbiz.com'
-      } : a
-    ));
+  const approval = approvals.find(a => a.id === approvalId);
+  if (!approval) return;
 
-    // Update bot pending count
-    setBots(prev => prev.map(b => 
-      b.id === approval.botId ? { ...b, pendingApprovals: Math.max(0, b.pendingApprovals - 1) } : b
-    ));
+  // 🔒 SERVER IS SOURCE OF TRUTH
+  await fetch(`/api/approvals/${approvalId}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': import.meta.env.VITE_ADMIN_API_KEY,
+    },
+    body: JSON.stringify({ approved }),
+  });
 
-    // Add security log
-    const newLog: SecurityLog = {
-      id: `log-${Date.now()}`,
-      event: `Approval ${approved ? 'Approved' : 'Rejected'}`,
-      user: 'admin@bharatbiz.com',
-      ip: '203.192.12.45',
-      timestamp: new Date(),
-      severity: 'info',
-      details: `${approval.action} for ${approval.customerName} - ${approved ? 'Approved' : 'Rejected'}`
-    };
-    setSecurityLogs(prev => [newLog, ...prev]);
+  // Update approvals
+  setApprovals(prev =>
+    prev.map(a =>
+      a.id === approvalId
+        ? { ...a, status: approved ? 'approved' : 'rejected', resolvedAt: new Date().toISOString() }
+        : a
+    )
+  );
 
-    toast.success(approved ? `✅ Approved: ${approval.customerName}'s request` : `❌ Rejected: ${approval.customerName}'s request`);
-    setShowApprovalDialog(false);
-  }, [approvals]);
+  // Unlock conversation AFTER approval
+  if (approved) {
+    setConversations(prev =>
+      prev.map(conv =>
+        conv.customerPhone === approval.customerPhone
+          ? { ...conv, status: 'active' }
+          : conv
+      )
+    );
+  }
+
+  toast.success(
+    approved
+      ? `Approved: ${approval.customerName}`
+      : `Rejected: ${approval.customerName}`
+  );
+
+  setProcessingApprovalId(null);
+}, [approvals, processingApprovalId]);
+
+
 
   // Toggle bot status
   const toggleBotStatus = useCallback((botId: string) => {
@@ -321,17 +373,17 @@ function App() {
       id: `msg-${Date.now()}`,
       type: 'admin',
       content: newMessage,
-      timestamp: new Date(),
+      timestamp: new Date().toISOString(),
       language: detectLanguage(newMessage)
     };
 
     setConversations(prev => prev.map(conv => 
       conv.id === selectedConversation.id 
-        ? { ...conv, messages: [...conv.messages, message], lastMessageAt: new Date() }
+        ? { ...conv, messages: [...conv.messages, message], lastMessageAt: new Date().toISOString() }
         : conv
     ));
 
-    setSelectedConversation(prev => prev ? { ...prev, messages: [...prev.messages, message], lastMessageAt: new Date() } : null);
+    setSelectedConversation(prev => prev ? { ...prev, messages: [...prev.messages, message], lastMessageAt: new Date().toISOString() } : null);
     setNewMessage('');
     toast.success('Message sent');
   }, [newMessage, selectedConversation]);
@@ -362,7 +414,7 @@ function App() {
       event: 'Encryption Key Rotated',
       user: 'admin@bharatbiz.com',
       ip: '203.192.12.45',
-      timestamp: new Date(),
+      timestamp: new Date().toISOString(),
       severity: 'info',
       details: 'Master encryption key rotated successfully'
     };
@@ -413,36 +465,25 @@ function App() {
   };
 
   // Filtered approvals
-  const filteredApprovals = approvals.filter(a => {
-    if (approvalFilter === 'all') return true;
-    return a.status === approvalFilter;
-  });
+  const filteredApprovals = useMemo(() => {
+    return approvals.filter(a =>
+      approvalFilter === 'all' ? true : a.status === approvalFilter
+    );
+  }, [approvals, approvalFilter]);
 
   // Filtered conversations
-  const filteredConversations = conversations.filter(c => 
-    c.customerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    c.customerPhone.includes(searchQuery)
-  );
+  const filteredConversations = useMemo(() => {
+    return conversations.filter(c =>
+      c.customerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      c.customerPhone.includes(searchQuery)
+    );
+  }, [conversations, searchQuery]);
 
-  // Render sidebar item
-  const SidebarItem = ({ id, icon: Icon, label, badge }: { id: string; icon: any; label: string; badge?: number }) => (
-    <button
-      onClick={() => { setActiveTab(id); setSidebarOpen(false); }}
-      className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${
-        activeTab === id 
-          ? 'bg-primary text-primary-foreground shadow-md' 
-          : 'hover:bg-muted text-muted-foreground'
-      }`}
-    >
-      <Icon className="w-5 h-5" />
-      <span className="font-medium flex-1 text-left">{label}</span>
-      {badge !== undefined && badge > 0 && (
-        <Badge variant={activeTab === id ? "secondary" : "default"} className="text-xs">
-          {badge}
-        </Badge>
-      )}
-    </button>
-  );
+  const navigate = useCallback((tab: string) => {
+    setActiveTab(tab);
+    setSidebarOpen(false);
+  }, []);
+
 
   return (
     <div className="flex h-screen bg-background">
@@ -463,14 +504,14 @@ function App() {
             </SheetTitle>
           </SheetHeader>
           <nav className="p-4 space-y-1">
-            <SidebarItem id="dashboard" icon={BarChart3} label="Dashboard" />
-            <SidebarItem id="bots" icon={Bot} label="Bot Management" />
-            <SidebarItem id="approvals" icon={CheckCheck} label="Approvals" badge={stats.pendingApprovals} />
-            <SidebarItem id="conversations" icon={MessageSquare} label="Conversations" />
-            <SidebarItem id="orders" icon={FileText} label="Orders" />
-            <SidebarItem id="inventory" icon={Package} label="Inventory" />
-            <SidebarItem id="security" icon={Shield} label="Security & Privacy" />
-            <SidebarItem id="settings" icon={Settings} label="Settings" />
+            <SidebarItem id="dashboard" icon={BarChart3} label="Dashboard" activeTab={activeTab} navigate={navigate} />
+            <SidebarItem id="bots" icon={Bot} label="Bot Management" activeTab={activeTab} navigate={navigate} />
+            <SidebarItem id="approvals" icon={CheckCheck} label="Approvals" badge={stats.pendingApprovals} activeTab={activeTab} navigate={navigate} />
+            <SidebarItem id="conversations" icon={MessageSquare} label="Conversations" badge={conversations.length} activeTab={activeTab} navigate={navigate} />
+            <SidebarItem id="orders" icon={FileText} label="Orders" badge={approvals.filter(a => a.status === 'pending').length} activeTab={activeTab} navigate={navigate} />
+            <SidebarItem id="inventory" icon={Package} label="Inventory" activeTab={activeTab} navigate={navigate} />
+            <SidebarItem id="security" icon={Shield} label="Security & Privacy" activeTab={activeTab} navigate={navigate} />
+            <SidebarItem id="settings" icon={Settings} label="Settings" activeTab={activeTab} navigate={navigate} />
           </nav>
         </SheetContent>
       </Sheet>
@@ -487,22 +528,9 @@ function App() {
               <p className="text-xs text-muted-foreground">Admin Dashboard</p>
             </div>
           </div>
-        </div>
 
-        <nav className="flex-1 p-4 space-y-1">
-          <SidebarItem id="dashboard" icon={BarChart3} label="Dashboard" />
-          <SidebarItem id="bots" icon={Bot} label="Bot Management" />
-          <SidebarItem id="approvals" icon={CheckCheck} label="Approvals" badge={stats.pendingApprovals} />
-          <SidebarItem id="conversations" icon={MessageSquare} label="Conversations" />
-          <SidebarItem id="orders" icon={FileText} label="Orders" />
-          <SidebarItem id="inventory" icon={Package} label="Inventory" />
-          <SidebarItem id="security" icon={Shield} label="Security & Privacy" />
-          <SidebarItem id="settings" icon={Settings} label="Settings" />
-        </nav>
-
-        <div className="p-4 border-t">
-          <Card className="bg-gradient-to-br from-green-50 to-green-100 border-green-200">
-            <CardContent className="p-3">
+          <Card className="mt-4">
+            <CardContent className="p-4">
               <div className="flex items-center gap-2 mb-2">
                 <Shield className="w-4 h-4 text-green-600" />
                 <span className="text-xs font-semibold text-green-800">System Secure</span>
@@ -515,6 +543,17 @@ function App() {
             </CardContent>
           </Card>
         </div>
+
+        <nav className="flex-1 p-4 space-y-1">
+          <SidebarItem id="dashboard" icon={BarChart3} label="Dashboard" activeTab={activeTab} navigate={navigate} />
+          <SidebarItem id="bots" icon={Bot} label="Bot Management" activeTab={activeTab} navigate={navigate} />
+          <SidebarItem id="approvals" icon={CheckCheck} label="Approvals" badge={stats.pendingApprovals} activeTab={activeTab} navigate={navigate} />
+          <SidebarItem id="conversations" icon={MessageSquare} label="Conversations" badge={conversations.length} activeTab={activeTab} navigate={navigate} />
+          <SidebarItem id="orders" icon={FileText} label="Orders" badge={approvals.filter(a => a.status === 'pending').length} activeTab={activeTab} navigate={navigate} />
+          <SidebarItem id="inventory" icon={Package} label="Inventory" activeTab={activeTab} navigate={navigate} />
+          <SidebarItem id="security" icon={Shield} label="Security & Privacy" activeTab={activeTab} navigate={navigate} />
+          <SidebarItem id="settings" icon={Settings} label="Settings" activeTab={activeTab} navigate={navigate} />
+        </nav>
       </aside>
 
       {/* Main Content */}
@@ -538,7 +577,7 @@ function App() {
               <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
               <span className="text-xs font-medium text-green-700">All Systems Operational</span>
             </div>
-            <Button variant="ghost" size="icon" className="relative" onClick={() => setActiveTab('approvals')}>
+            <Button variant="ghost" size="icon" className="relative" onClick={() => navigate('approvals')}>
               <Bell className="w-5 h-5" />
               {stats.pendingApprovals > 0 && (
                 <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
@@ -562,7 +601,7 @@ function App() {
                 <div className="space-y-6">
                   {/* Stats Grid */}
                   <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                    <Card className="bg-gradient-to-br from-blue-50 to-blue-100 border-blue-200 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => setActiveTab('bots')}>
+                    <Card className="bg-gradient-to-br from-blue-50 to-blue-100 border-blue-200 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate('bots')}>
                       <CardHeader className="pb-2">
                         <CardDescription className="text-blue-700 flex items-center gap-2">
                           <Bot className="w-4 h-4" /> Active Bots
@@ -573,7 +612,7 @@ function App() {
                         <p className="text-xs text-blue-600">{stats.totalCustomers} customers connected</p>
                       </CardContent>
                     </Card>
-                    <Card className="bg-gradient-to-br from-orange-50 to-orange-100 border-orange-200 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => setActiveTab('approvals')}>
+                    <Card className="bg-gradient-to-br from-orange-50 to-orange-100 border-orange-200 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate('approvals')}>
                       <CardHeader className="pb-2">
                         <CardDescription className="text-orange-700 flex items-center gap-2">
                           <CheckCheck className="w-4 h-4" /> Pending Approvals
@@ -584,7 +623,7 @@ function App() {
                         <p className="text-xs text-orange-600">Require admin action</p>
                       </CardContent>
                     </Card>
-                    <Card className="bg-gradient-to-br from-green-50 to-green-100 border-green-200 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => setActiveTab('orders')}>
+                    <Card className="bg-gradient-to-br from-green-50 to-green-100 border-green-200 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate('orders')}>
                       <CardHeader className="pb-2">
                         <CardDescription className="text-green-700 flex items-center gap-2">
                           <FileText className="w-4 h-4" /> Bot-Handled Orders
@@ -677,7 +716,7 @@ function App() {
                         <CardTitle>Recent Approval Requests</CardTitle>
                         <CardDescription>Pending bot action approvals</CardDescription>
                       </div>
-                      <Button variant="outline" size="sm" onClick={() => setActiveTab('approvals')}>
+                      <Button variant="outline" size="sm" onClick={() => navigate('approvals')}>
                         View All
                       </Button>
                     </CardHeader>
@@ -703,17 +742,28 @@ function App() {
                                 <Badge className={getPriorityColor(approval.priority)}>{approval.priority}</Badge>
                               </TableCell>
                               <TableCell className="text-muted-foreground">
-                                {Math.round((Date.now() - approval.requestedAt.getTime()) / 60000)}m ago
+                                {getTimeAgo(approval.requestedAt)}
                               </TableCell>
                               <TableCell className="text-right">
                                 <div className="flex justify-end gap-2">
                                   <Button size="sm" variant="outline" className="h-8 w-8 p-0" onClick={() => { setSelectedApproval(approval); setShowApprovalDialog(true); }}>
                                     <Eye className="h-4 w-4" />
                                   </Button>
-                                  <Button size="sm" className="h-8 w-8 p-0 bg-green-600 hover:bg-green-700" onClick={() => handleApproval(approval.id, true)}>
+                                  <Button
+                                    size="sm"
+                                    disabled={processingApprovalId === approval.id}
+                                    className="h-8 w-8 p-0 bg-green-600 hover:bg-green-700"
+                                    onClick={() => handleApproval(approval.id, true)}
+                                  >
                                     <CheckCircle className="h-4 w-4" />
                                   </Button>
-                                  <Button size="sm" variant="destructive" className="h-8 w-8 p-0" onClick={() => handleApproval(approval.id, false)}>
+                                  <Button
+                                    size="sm"
+                                    variant="destructive"
+                                    disabled={processingApprovalId === approval.id}
+                                    onClick={() => handleApproval(approval.id, false)}
+                                  >
+
                                     <XCircle className="h-4 w-4" />
                                   </Button>
                                 </div>
@@ -813,7 +863,7 @@ function App() {
                       <p className="text-muted-foreground">Review and approve bot actions</p>
                     </div>
                     <div className="flex gap-2">
-                      <Select value={approvalFilter} onValueChange={(v: any) => setApprovalFilter(v)}>
+                      <Select value={approvalFilter} onValueChange={(v: "all" | "pending" | "approved" | "rejected") => setApprovalFilter(v)}>
                         <SelectTrigger className="w-32">
                           <Filter className="w-4 h-4 mr-2" />
                           <SelectValue />
@@ -857,11 +907,16 @@ function App() {
                               <div className="text-right">
                                 <p className="font-bold text-lg">{approval.details.amount ? formatCurrency(approval.details.amount) : '-'}</p>
                                 <p className="text-xs text-muted-foreground">{approval.botName}</p>
-                                <p className="text-xs text-muted-foreground">{Math.round((Date.now() - approval.requestedAt.getTime()) / 60000)}m ago</p>
+                                <p className="text-xs text-muted-foreground">{getTimeAgo(approval.requestedAt)}</p>
                               </div>
                               {approval.status === 'pending' && (
                                 <div className="flex gap-2">
-                                  <Button size="sm" onClick={() => handleApproval(approval.id, true)}>
+                                  <Button
+                                    size="sm"
+                                    disabled={processingApprovalId === approval.id}
+                                    onClick={() => handleApproval(approval.id, true)}
+                                  >
+
                                     <CheckCircle className="w-4 h-4 mr-1" />
                                     Approve
                                   </Button>
@@ -878,7 +933,7 @@ function App() {
                                   </Badge>
                                   {approval.resolvedAt && (
                                     <p className="text-xs text-muted-foreground mt-1">
-                                      {Math.round((Date.now() - approval.resolvedAt.getTime()) / 60000)}m ago
+                                      {getTimeAgo(approval.resolvedAt)}
                                     </p>
                                   )}
                                 </div>
@@ -957,7 +1012,7 @@ function App() {
                                   </Badge>
                                 )}
                                 <span className={`text-xs ${selectedConversation?.id === conv.id ? 'text-primary-foreground/50' : 'text-muted-foreground'}`}>
-                                  {Math.round((Date.now() - conv.lastMessageAt.getTime()) / 60000)}m ago
+                                  {getTimeAgo(conv.lastMessageAt)}
                                 </span>
                               </div>
                             </button>
@@ -1003,18 +1058,24 @@ function App() {
                                         ? 'bg-muted' 
                                         : msg.type === 'bot'
                                         ? 'bg-primary text-primary-foreground'
-                                        : 'bg-green-100 text-green-800'
+                                        : msg.type === 'admin'
+                                        ? 'bg-green-100 text-green-800'
+                                        : 'bg-yellow-100 text-yellow-800'
                                     }`}>
                                       <p className="text-sm">{msg.content}</p>
                                       {msg.translated && (
                                         <p className="text-xs opacity-70 mt-1">🌐 Translated from Hindi</p>
                                       )}
                                       <p className={`text-xs mt-1 ${msg.type === 'customer' ? 'text-muted-foreground' : 'opacity-70'}`}>
-                                        {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                        {new Date(msg.timestamp).toLocaleTimeString([], { 
+                                          hour: '2-digit', 
+                                          minute: '2-digit' 
+                                        })}
                                       </p>
                                     </div>
                                   </div>
                                 ))}
+                                <div ref={chatEndRef} />
                               </div>
                             </ScrollArea>
                           </CardContent>
@@ -1033,7 +1094,10 @@ function App() {
                                 className="flex-1" 
                                 value={newMessage}
                                 onChange={(e) => setNewMessage(e.target.value)}
-                                onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' && !isRecording) sendMessage();
+                                }}
+
                               />
                               <Button onClick={sendMessage} disabled={!newMessage.trim()}>
                                 <Send className="w-4 h-4" />
@@ -1307,7 +1371,7 @@ function App() {
                               <TableCell className="font-medium">{log.event}</TableCell>
                               <TableCell>{log.user}</TableCell>
                               <TableCell className="text-muted-foreground font-mono text-xs">{log.ip}</TableCell>
-                              <TableCell>{Math.round((Date.now() - log.timestamp.getTime()) / 60000)}m ago</TableCell>
+                              <TableCell>{getTimeAgo(log.timestamp)}</TableCell>
                               <TableCell>
                                 <Badge 
                                   variant={log.severity === 'critical' ? 'destructive' : log.severity === 'warning' ? 'secondary' : 'default'}
@@ -1537,7 +1601,11 @@ function App() {
               <XCircle className="w-4 h-4 mr-1" />
               Reject
             </Button>
-            <Button onClick={() => selectedApproval && handleApproval(selectedApproval.id, true)}>
+            <Button
+              disabled={processingApprovalId === selectedApproval?.id}
+              onClick={() => selectedApproval && handleApproval(selectedApproval.id, true)}
+            >
+
               <CheckCircle className="w-4 h-4 mr-1" />
               Approve
             </Button>
@@ -1652,7 +1720,7 @@ function App() {
                 apiKey: '****', 
                 connectedCustomers: 0, 
                 pendingApprovals: 0, 
-                lastActivity: new Date(), 
+                lastActivity: new Date().toISOString(), 
                 encryptionEnabled: true,
                 autoApproveThreshold: 5000,
                 voiceEnabled: true 
