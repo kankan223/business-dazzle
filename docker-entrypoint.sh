@@ -1,10 +1,10 @@
 #!/bin/sh
 
-# Bharat Biz-Agent Docker Entrypoint
+# Dazzle Docker Entrypoint
 
 echo "
 ╔══════════════════════════════════════════════════════════╗
-║          Bharat Biz-Agent - Starting Services            ║
+║          Dazzle - Starting Services            ║
 ╚══════════════════════════════════════════════════════════╝
 "
 
