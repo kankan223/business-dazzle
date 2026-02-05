@@ -1,8 +1,9 @@
 import { useState, useCallback, useMemo } from 'react';
 import { getTimeAgo } from '@/hooks/use-time-ago';
 import { SidebarItem } from '@/components/sidebar-item';
+import { apiService, type Bot, type Conversation, type Approval, type Stats } from '@/services/api';
 import {
-  Bot, MessageSquare, FileText, Package, Shield, Bell,
+  Bot as BotIcon, MessageSquare, FileText, Package, Shield, Bell,
   Settings, BarChart3, CheckCircle, XCircle,
   Filter, Phone, Mic, Send, RefreshCw, Lock,
   Database, Activity, CheckCheck,
@@ -10,6 +11,8 @@ import {
   Eye, Download, Play, Pause, Key, Fingerprint,
   AlertTriangle, Check
 } from 'lucide-react';
+import { VoiceInput } from './components/VoiceInput';
+import { DirectCommand } from './components/DirectCommand';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -28,198 +31,7 @@ import './App.css';
 import { useEffect } from 'react';
 import { useRef } from 'react';
 
-// ==================== TYPES ====================
-
-interface BotInstance {
-  id: string;
-  name: string;
-  platform: 'whatsapp' | 'telegram';
-  status: 'active' | 'paused' | 'error' | 'connecting';
-  phoneNumber?: string;
-  apiKey: string;
-  connectedCustomers: number;
-  pendingApprovals: number;
-  lastActivity: string;
-  encryptionEnabled: boolean;
-  autoApproveThreshold: number;
-  voiceEnabled: boolean;
-}
-
-interface PendingApproval {
-  id: string;
-  botId: string;
-  botName: string;
-  customerName: string;
-  customerPhone: string;
-  action: 'generate_invoice' | 'process_payment' | 'update_inventory' | 'share_data' | 'refund';
-  details: {
-    amount?: number;
-    items?: string[];
-    reason?: string;
-    [key: string]: unknown;
-  };
-  requestedAt: string;
-  priority: 'low' | 'medium' | 'high' | 'urgent';
-  status: 'pending' | 'approved' | 'rejected';
-  resolvedAt?: string;
-  resolvedBy?: string;
-}
-
-interface CustomerConversation {
-  id: string;
-  customerName: string;
-  customerPhone: string;
-  botId: string;
-  botName: string;
-  platform: 'whatsapp' | 'telegram';
-  messages: Message[];
-  lastMessageAt: string;
-  status: 'active' | 'closed' | 'waiting_approval';
-  tags: string[];
-}
-
-interface Message {
-  id: string;
-  type: 'customer' | 'bot' | 'admin' | 'system';
-  content: string;
-  timestamp: string;
-  mediaUrl?: string;
-  requiresApproval?: boolean;
-  translated?: boolean;
-  originalContent?: string;
-  language?: 'en' | 'hi' | 'hinglish';
-}
-
-interface Order {
-  id: string;
-  customerName: string;
-  customerPhone: string;
-  items: { name: string; quantity: number; price: number }[];
-  total: number;
-  gstAmount: number;
-  status: 'pending' | 'confirmed' | 'processing' | 'shipped' | 'delivered' | 'cancelled';
-  createdAt: string;
-  botHandled: boolean;
-  invoiceGenerated?: boolean;
-}
-
-interface InventoryItem {
-  id: string;
-  name: string;
-  sku: string;
-  quantity: number;
-  unit: string;
-  price: number;
-  lowStockThreshold: number;
-  inquiries: number;
-}
-
-interface SecurityLog {
-  id: string;
-  event: string;
-  user: string;
-  ip: string;
-  timestamp: string;
-  severity: 'info' | 'warning' | 'critical';
-  details: string;
-}
-
-// ==================== LANGUAGE DETECTION ====================
-
-function detectLanguage(text: string): 'en' | 'hi' | 'hinglish' {
-  const hindiRegex = /[\u0900-\u097F]/;
-  const hinglishWords = ['hai', 'hoon', 'aap', 'kaise', 'karo', 'bhejo', 'dena', 'lena', 'rupee', 'rupey', 'kal', 'aaj', 'mujhe', 'chahiye', 'karna', 'karo', 'batao', 'bataiye', 'kitna', 'kitne'];
-  
-  if (hindiRegex.test(text)) return 'hi';
-  const lowerText = text.toLowerCase();
-  if (hinglishWords.some(word => lowerText.includes(word))) return 'hinglish';
-  return 'en';
-}
-
 // ==================== MOCK DATA ====================
-
-const mockBots: BotInstance[] = [
-  { id: 'bot-1', name: 'Sales Bot - Primary', platform: 'whatsapp', status: 'active', phoneNumber: '+91-98765-43210', apiKey: 'wa_api_****1234', connectedCustomers: 156, pendingApprovals: 3, lastActivity: new Date().toISOString(), encryptionEnabled: true, autoApproveThreshold: 5000, voiceEnabled: true },
-  { id: 'bot-2', name: 'Support Bot', platform: 'telegram', status: 'active', apiKey: 'tg_api_****5678', connectedCustomers: 89, pendingApprovals: 1, lastActivity: new Date(Date.now() - 1000 * 60 * 5).toISOString(), encryptionEnabled: true, autoApproveThreshold: 10000, voiceEnabled: true },
-  { id: 'bot-3', name: 'Order Bot', platform: 'whatsapp', status: 'paused', phoneNumber: '+91-98765-43211', apiKey: 'wa_api_****9012', connectedCustomers: 45, pendingApprovals: 0, lastActivity: new Date(Date.now() - 1000 * 60 * 30).toISOString(), encryptionEnabled: false, autoApproveThreshold: 3000, voiceEnabled: false },
-];
-
-const mockApprovals: PendingApproval[] = [
-  { id: 'app-1', botId: 'bot-1', botName: 'Sales Bot - Primary', customerName: 'Rahul Sharma', customerPhone: '+91-98765-11111', action: 'generate_invoice', details: { amount: 15400, items: ['Rice 100kg', 'Sugar 50kg'] }, requestedAt: new Date(Date.now() - 1000 * 60 * 10).toISOString(), priority: 'medium', status: 'pending' },
-  { id: 'app-2', botId: 'bot-1', botName: 'Sales Bot - Primary', customerName: 'Priya Patel', customerPhone: '+91-98765-22222', action: 'process_payment', details: { amount: 8500, method: 'UPI' }, requestedAt: new Date(Date.now() - 1000 * 60 * 5).toISOString(), priority: 'high', status: 'pending' },
-  { id: 'app-3', botId: 'bot-2', botName: 'Support Bot', customerName: 'Amit Kumar', customerPhone: '+91-98765-33333', action: 'share_data', details: { dataType: 'order_history', reason: 'Customer dispute' }, requestedAt: new Date(Date.now() - 1000 * 60 * 2).toISOString(), priority: 'urgent', status: 'pending' },
-];
-
-const mockConversations: CustomerConversation[] = [
-  {
-    id: 'conv-1',
-    customerName: 'Rahul Sharma',
-    customerPhone: '+91-98765-11111',
-    botId: 'bot-1',
-    botName: 'Sales Bot - Primary',
-    platform: 'whatsapp',
-    messages: [
-      { id: 'm1', type: 'customer', content: 'Namaste, mujhe 100kg chawal chahiye', timestamp: new Date(Date.now() - 1000 * 60 * 30).toISOString(), language: 'hinglish' },
-      { id: 'm2', type: 'bot', content: 'Namaste Rahul ji! 100kg Basmati Rice ka rate ₹120/kg hai. Total ₹12,000 + GST. Kya confirm karna hai?', timestamp: new Date(Date.now() - 1000 * 60 * 29).toISOString(), language: 'hinglish' },
-      { id: 'm3', type: 'customer', content: 'Haan bhej do, aur 50kg cheeni bhi', timestamp: new Date(Date.now() - 1000 * 60 * 25).toISOString(), language: 'hinglish' },
-      { id: 'm4', type: 'system', content: '⚠️ Admin approval required for invoice ₹15,400', timestamp: new Date(Date.now() - 1000 * 60 * 24).toISOString(), requiresApproval: true },
-    ],
-    lastMessageAt: new Date(Date.now() - 1000 * 60 * 24).toISOString(),
-    status: 'waiting_approval',
-    tags: ['order', 'pending-approval']
-  },
-  {
-    id: 'conv-2',
-    customerName: 'Priya Patel',
-    customerPhone: '+91-98765-22222',
-    botId: 'bot-1',
-    botName: 'Sales Bot - Primary',
-    platform: 'whatsapp',
-    messages: [
-      { id: 'm1', type: 'customer', content: 'Mera payment status kya hai?', timestamp: new Date(Date.now() - 1000 * 60 * 15).toISOString(), language: 'hinglish' },
-      { id: 'm2', type: 'bot', content: 'Priya ji, aapka ₹8,500 payment pending hai. Due date 15 Jan 2024. Payment karna hai?', timestamp: new Date(Date.now() - 1000 * 60 * 14).toISOString(), language: 'hinglish' },
-      { id: 'm3', type: 'customer', content: 'Haan abhi karta hoon UPI se', timestamp: new Date(Date.now() - 1000 * 60 * 10).toISOString(), language: 'hinglish' },
-    ],
-    lastMessageAt: new Date(Date.now() - 1000 * 60 * 10).toISOString(),
-    status: 'active',
-    tags: ['payment', 'upi']
-  },
-  {
-    id: 'conv-3',
-    customerName: 'Sunita Devi',
-    customerPhone: '+91-98765-44444',
-    botId: 'bot-2',
-    botName: 'Support Bot',
-    platform: 'telegram',
-    messages: [
-      { id: 'm1', type: 'customer', content: 'नमस्ते, चावल का रेट बताइए', timestamp: new Date(Date.now() - 1000 * 60 * 45).toISOString(), language: 'hi' },
-      { id: 'm2', type: 'bot', content: 'नमस्ते सुनीता जी! चावल (बासमती) की कीमत ₹120 प्रति किलो है। और जानकारी चाहिए?', timestamp: new Date(Date.now() - 1000 * 60 * 44).toISOString(), language: 'hi', translated: true },
-    ],
-    lastMessageAt: new Date(Date.now() - 1000 * 60 * 44).toISOString(),
-    status: 'active',
-    tags: ['price-inquiry']
-  },
-];
-
-const mockOrders: Order[] = [
-  { id: 'ORD-001', customerName: 'Rahul Sharma', customerPhone: '+91-98765-11111', items: [{ name: 'Rice (Basmati)', quantity: 100, price: 120 }, { name: 'Sugar', quantity: 50, price: 42 }], total: 14100, gstAmount: 1300, status: 'pending', createdAt: new Date(Date.now() - 1000 * 60 * 60).toISOString(), botHandled: true, invoiceGenerated: false },
-  { id: 'ORD-002', customerName: 'Priya Patel', customerPhone: '+91-98765-22222', items: [{ name: 'Wheat Flour', quantity: 150, price: 45 }], total: 6750, gstAmount: 750, status: 'confirmed', createdAt: new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString(), botHandled: true, invoiceGenerated: true },
-  { id: 'ORD-003', customerName: 'Amit Kumar', customerPhone: '+91-98765-33333', items: [{ name: 'Cooking Oil', quantity: 20, price: 180 }], total: 3600, gstAmount: 400, status: 'processing', createdAt: new Date(Date.now() - 1000 * 60 * 60 * 5).toISOString(), botHandled: false, invoiceGenerated: true },
-];
-
-const mockInventory: InventoryItem[] = [
-  { id: 'inv-1', name: 'Rice (Basmati)', sku: 'RICE-BAS-001', quantity: 150, unit: 'kg', price: 120, lowStockThreshold: 50, inquiries: 45 },
-  { id: 'inv-2', name: 'Wheat Flour', sku: 'FLOUR-WHT-001', quantity: 25, unit: 'kg', price: 45, lowStockThreshold: 100, inquiries: 32 },
-  { id: 'inv-3', name: 'Sugar', sku: 'SUGAR-001', quantity: 80, unit: 'kg', price: 42, lowStockThreshold: 60, inquiries: 28 },
-  { id: 'inv-4', name: 'Cooking Oil', sku: 'OIL-001', quantity: 12, unit: 'litre', price: 180, lowStockThreshold: 20, inquiries: 15 },
-];
-
-const mockSecurityLogs: SecurityLog[] = [
-  { id: 'log-1', event: 'Bot API Key Rotated', user: 'admin@bharatbiz.com', ip: '203.192.12.45', timestamp: new Date(Date.now() - 1000 * 60 * 60).toISOString(), severity: 'info', details: 'WhatsApp bot API key rotated successfully' },
-  { id: 'log-2', event: 'Failed Login Attempt', user: 'unknown', ip: '185.220.101.33', timestamp: new Date(Date.now() - 1000 * 60 * 30).toISOString(), severity: 'warning', details: '3 failed login attempts from unknown IP' },
-  { id: 'log-3', event: 'Data Export Request', user: 'admin@bharatbiz.com', ip: '203.192.12.45', timestamp: new Date(Date.now() - 1000 * 60 * 15).toISOString(), severity: 'info', details: 'Customer data export approved and downloaded' },
-  { id: 'log-4', event: 'Suspicious Activity', user: 'bot-2', ip: 'internal', timestamp: new Date(Date.now() - 1000 * 60 * 5).toISOString(), severity: 'critical', details: 'Unusual pattern detected in message volume' },
-];
 
 const chartData = [
   { name: 'Mon', messages: 120, orders: 15, approvals: 3 },
@@ -241,17 +53,32 @@ const platformData = [
 function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [bots, setBots] = useState<BotInstance[]>(mockBots);
-  const [approvals, setApprovals] = useState<PendingApproval[]>(mockApprovals);
-  const [conversations, setConversations] = useState<CustomerConversation[]>(mockConversations);
-  const [orders] = useState<Order[]>(mockOrders);
-  const [inventory] = useState<InventoryItem[]>(mockInventory);
-  const [securityLogs, setSecurityLogs] = useState<SecurityLog[]>(mockSecurityLogs);
-  const [selectedConversation, setSelectedConversation] = useState<CustomerConversation | null>(null);
+  const [bots, setBots] = useState<Bot[]>([]);
+  const [approvals, setApprovals] = useState<Approval[]>([]);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [orders, setOrders] = useState<any[]>([]);
+  const [inventory] = useState([
+    { id: 'inv-1', name: 'Rice', sku: 'RICE-001', quantity: 120, unit: 'kg', price: 35, lowStockThreshold: 100, inquiries: 32 },
+    { id: 'inv-2', name: 'Wheat', sku: 'WHEAT-001', quantity: 150, unit: 'kg', price: 28, lowStockThreshold: 120, inquiries: 25 },
+    { id: 'inv-3', name: 'Sugar', sku: 'SUGAR-001', quantity: 80, unit: 'kg', price: 42, lowStockThreshold: 60, inquiries: 28 },
+    { id: 'inv-4', name: 'Cooking Oil', sku: 'OIL-001', quantity: 12, unit: 'litre', price: 180, lowStockThreshold: 20, inquiries: 15 },
+    { id: 'inv-5', name: 'Turmeric Powder', sku: 'TURM-001', quantity: 25, unit: 'kg', price: 120, lowStockThreshold: 15, inquiries: 8 },
+    { id: 'inv-6', name: 'Red Chilli Powder', sku: 'CHILLI-001', quantity: 30, unit: 'kg', price: 85, lowStockThreshold: 20, inquiries: 12 }
+  ]);
+  const [orderForm, setOrderForm] = useState({
+    customerName: '',
+    customerPhone: '',
+    productId: '',
+    quantity: 1
+  });
+  const [securityLogs, setSecurityLogs] = useState<any[]>([]);
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
   const [showApprovalDialog, setShowApprovalDialog] = useState(false);
-  const [selectedApproval, setSelectedApproval] = useState<PendingApproval | null>(null);
+  const [selectedApproval, setSelectedApproval] = useState<Approval | null>(null);
   const [showBotConfig, setShowBotConfig] = useState(false);
-  const [selectedBot, setSelectedBot] = useState<BotInstance | null>(null);
+  const [selectedBot, setSelectedBot] = useState<Bot | null>(null);
   const [showEncryptionKey, setShowEncryptionKey] = useState(false);
   const [encryptionKey, setEncryptionKey] = useState('••••••••••••••••');
   const [newMessage, setNewMessage] = useState('');
@@ -270,13 +97,119 @@ function App() {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [selectedConversation]);
-  
 
+  // Initialize data and WebSocket connection
   useEffect(() => {
-    fetch('/api/approvals')
-      .then(res => res.json())
-      .then(data => setApprovals(data))
-      .catch((error) => console.error('Error fetching approvals:', error));
+    const initializeApp = async () => {
+      try {
+        setLoading(true);
+        
+        // Initialize WebSocket connection
+        await apiService.initializeWebSocket();
+        
+        // Fetch initial data
+        const [botsData, approvalsData, conversationsData, statsData, securityLogsData] = await Promise.all([
+          apiService.getBots(),
+          apiService.getApprovals(),
+          apiService.getConversations(),
+          apiService.getStats(),
+          apiService.getSecurityLogs()
+        ]);
+        
+        setBots(botsData);
+        setApprovals(approvalsData);
+        setConversations(conversationsData);
+        setStats(statsData);
+        setSecurityLogs(securityLogsData);
+        
+      } catch (error) {
+        console.error('Failed to initialize app:', error);
+        toast.error('Failed to load data. Please refresh the page.');
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    initializeApp();
+    
+    // Set up WebSocket event listeners
+    apiService.onApprovalUpdate((data) => {
+      setApprovals(prev => prev.map(a => a.id === data.id ? { ...a, status: data.status as any, resolvedBy: data.resolvedBy } : a));
+      toast.success(`Approval ${data.status} by ${data.resolvedBy}`);
+    });
+
+    apiService.onNewMessage((data) => {
+      console.log('New message received:', data);
+      
+      // Update conversations if message belongs to a conversation
+      if (data.conversationId) {
+        setConversations(prev => prev.map(conv => 
+          conv.id === data.conversationId 
+            ? { ...conv, messages: [...conv.messages, data], lastMessageAt: data.timestamp }
+            : conv
+        ));
+      }
+      
+      // Show notification for new messages
+      toast.success(`New message from ${data.senderName || 'Customer'}`);
+    });
+
+    apiService.onConversationUpdate((data) => {
+      console.log('Conversation update:', data);
+      setConversations(prev => prev.map(conv => 
+        conv.id === data.conversationId ? { ...conv, ...data } : conv
+      ));
+    });
+
+    apiService.onBotUpdate((data) => {
+      console.log('Bot update:', data);
+      setBots(prev => prev.map(bot => 
+        bot.id === data.id ? { ...bot, ...data } : bot
+      ));
+    });
+
+    apiService.onOrderUpdate((data) => {
+      console.log('Order update:', data);
+      setOrders(prev => prev.map(order => 
+        order.id === data.id ? { ...order, ...data } : order
+      ));
+    });
+
+    // Handle WebSocket errors
+    apiService.onError((error) => {
+      console.error('WebSocket error:', error);
+      toast.error(`Connection error: ${error.message}`);
+    });
+
+    // Handle connection status
+    apiService.onConnectionChange((connected) => {
+      if (connected) {
+        toast.success('Connected to real-time updates');
+      } else {
+        toast.error('Disconnected from real-time updates');
+      }
+    });
+    
+    apiService.onNewMessage((data) => {
+      setConversations(prev => {
+        const existingIndex = prev.findIndex(c => c.customerId === data.customerId);
+        if (existingIndex >= 0) {
+          const updated = [...prev];
+          updated[existingIndex] = data;
+          return updated;
+        }
+        return [data, ...prev];
+      });
+    });
+    
+    apiService.onNewApproval((data) => {
+      setApprovals(prev => [data, ...prev]);
+      toast.info('New approval request received');
+    });
+    
+    return () => {
+      apiService.disconnect();
+    };
   }, []);
 
   useEffect(() => {
@@ -292,64 +225,32 @@ function App() {
     closeDialogs();
   }, [activeTab]);
 
-  // Stats calculation
-  const stats = useMemo(() => ({
-    totalBots: bots.length,
-    activeBots: bots.filter(b => b.status === 'active').length,
-    pendingApprovals: approvals.filter(a => a.status === 'pending').length,
-    totalCustomers: bots.reduce((sum, b) => sum + b.connectedCustomers, 0),
-    totalMessages: conversations.reduce((sum, c) => sum + c.messages.length, 0),
-    botHandledOrders: orders.filter(o => o.botHandled).length,
-    totalRevenue: orders.reduce((sum, o) => sum + o.total + o.gstAmount, 0),
-  }), [bots, approvals, conversations, orders]);
+  // Stats are now fetched from API
 
 
   // Handle approval with notification
   const handleApproval = useCallback(async (approvalId: string, approved: boolean) => {
-  if (processingApprovalId) return;
-  setProcessingApprovalId(approvalId);
+    if (processingApprovalId) return;
+    setProcessingApprovalId(approvalId);
 
-  const approval = approvals.find(a => a.id === approvalId);
-  if (!approval) return;
+    const approval = approvals.find(a => a.id === approvalId);
+    if (!approval) return;
 
-  // 🔒 SERVER IS SOURCE OF TRUTH
-  await fetch(`/api/approvals/${approvalId}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': import.meta.env.VITE_ADMIN_API_KEY,
-    },
-    body: JSON.stringify({ approved }),
-  });
-
-  // Update approvals
-  setApprovals(prev =>
-    prev.map(a =>
-      a.id === approvalId
-        ? { ...a, status: approved ? 'approved' : 'rejected', resolvedAt: new Date().toISOString() }
-        : a
-    )
-  );
-
-  // Unlock conversation AFTER approval
-  if (approved) {
-    setConversations(prev =>
-      prev.map(conv =>
-        conv.customerPhone === approval.customerPhone
-          ? { ...conv, status: 'active' }
-          : conv
-      )
-    );
-  }
-
-  toast.success(
-    approved
-      ? `Approved: ${approval.customerName}`
-      : `Rejected: ${approval.customerName}`
-  );
-
-  setProcessingApprovalId(null);
-}, [approvals, processingApprovalId]);
+    try {
+      await apiService.updateApproval(approvalId, approved ? 'approved' : 'rejected', 'Admin');
+      
+      toast.success(
+        approved
+          ? `Approved: ${approval.customerName}`
+          : `Rejected: ${approval.customerName}`
+      );
+    } catch (error) {
+      console.error('Failed to update approval:', error);
+      toast.error('Failed to update approval. Please try again.');
+    } finally {
+      setProcessingApprovalId(null);
+    }
+  }, [approvals, processingApprovalId]);
 
 
 
@@ -369,13 +270,14 @@ function App() {
   const sendMessage = useCallback(() => {
     if (!newMessage.trim() || !selectedConversation) return;
 
-    const message: Message = {
+    const message = {
       id: `msg-${Date.now()}`,
-      type: 'admin',
+      sender: 'admin' as const,
+      text: newMessage,
       content: newMessage,
       timestamp: new Date().toISOString(),
-      language: detectLanguage(newMessage)
-    };
+      type: 'admin' as const
+    } as const;
 
     setConversations(prev => prev.map(conv => 
       conv.id === selectedConversation.id 
@@ -409,7 +311,7 @@ function App() {
     const newKey = Array(32).fill(0).map(() => Math.floor(Math.random() * 16).toString(16)).join('');
     setEncryptionKey(newKey);
     
-    const newLog: SecurityLog = {
+    const newLog = {
       id: `log-${Date.now()}`,
       event: 'Encryption Key Rotated',
       user: 'admin@bharatbiz.com',
@@ -484,6 +386,16 @@ function App() {
     setSidebarOpen(false);
   }, []);
 
+  if (loading) {
+    return (
+      <div className="flex h-screen bg-background items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-muted-foreground">Loading Bharat Biz-Agent...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen bg-background">
@@ -495,7 +407,7 @@ function App() {
           <SheetHeader className="p-4 border-b">
             <SheetTitle className="flex items-center gap-2">
               <div className="w-10 h-10 bg-gradient-to-br from-orange-500 to-orange-600 rounded-xl flex items-center justify-center">
-                <Bot className="w-6 h-6 text-white" />
+                <BotIcon className="w-6 h-6 text-white" />
               </div>
               <div>
                 <span className="text-lg font-bold">Bharat Biz-Agent</span>
@@ -505,9 +417,10 @@ function App() {
           </SheetHeader>
           <nav className="p-4 space-y-1">
             <SidebarItem id="dashboard" icon={BarChart3} label="Dashboard" activeTab={activeTab} navigate={navigate} />
-            <SidebarItem id="bots" icon={Bot} label="Bot Management" activeTab={activeTab} navigate={navigate} />
-            <SidebarItem id="approvals" icon={CheckCheck} label="Approvals" badge={stats.pendingApprovals} activeTab={activeTab} navigate={navigate} />
+            <SidebarItem id="bots" icon={BotIcon} label="Bot Management" activeTab={activeTab} navigate={navigate} />
+            <SidebarItem id="approvals" icon={CheckCheck} label="Approvals" badge={stats?.pendingApprovals || 0} activeTab={activeTab} navigate={navigate} />
             <SidebarItem id="conversations" icon={MessageSquare} label="Conversations" badge={conversations.length} activeTab={activeTab} navigate={navigate} />
+            <SidebarItem id="commands" icon={Send} label="Commands" activeTab={activeTab} navigate={navigate} />
             <SidebarItem id="orders" icon={FileText} label="Orders" badge={approvals.filter(a => a.status === 'pending').length} activeTab={activeTab} navigate={navigate} />
             <SidebarItem id="inventory" icon={Package} label="Inventory" activeTab={activeTab} navigate={navigate} />
             <SidebarItem id="security" icon={Shield} label="Security & Privacy" activeTab={activeTab} navigate={navigate} />
@@ -521,7 +434,7 @@ function App() {
         <div className="p-4 border-b">
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 bg-gradient-to-br from-orange-500 to-orange-600 rounded-xl flex items-center justify-center shadow-lg">
-              <Bot className="w-7 h-7 text-white" />
+              <BotIcon className="w-7 h-7 text-white" />
             </div>
             <div>
               <h1 className="font-bold text-lg">Bharat Biz-Agent</h1>
@@ -538,7 +451,7 @@ function App() {
               <p className="text-xs text-green-700">AES-256 encryption active</p>
               <div className="flex items-center gap-2 mt-2">
                 <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                <span className="text-xs text-green-600">{stats.activeBots} bots online</span>
+                <span className="text-xs text-green-600">{stats?.activeBots || 0} bots online</span>
               </div>
             </CardContent>
           </Card>
@@ -546,9 +459,10 @@ function App() {
 
         <nav className="flex-1 p-4 space-y-1">
           <SidebarItem id="dashboard" icon={BarChart3} label="Dashboard" activeTab={activeTab} navigate={navigate} />
-          <SidebarItem id="bots" icon={Bot} label="Bot Management" activeTab={activeTab} navigate={navigate} />
-          <SidebarItem id="approvals" icon={CheckCheck} label="Approvals" badge={stats.pendingApprovals} activeTab={activeTab} navigate={navigate} />
+          <SidebarItem id="bots" icon={BotIcon} label="Bot Management" activeTab={activeTab} navigate={navigate} />
+          <SidebarItem id="approvals" icon={CheckCheck} label="Approvals" badge={stats?.pendingApprovals || 0} activeTab={activeTab} navigate={navigate} />
           <SidebarItem id="conversations" icon={MessageSquare} label="Conversations" badge={conversations.length} activeTab={activeTab} navigate={navigate} />
+          <SidebarItem id="commands" icon={Send} label="Commands" activeTab={activeTab} navigate={navigate} />
           <SidebarItem id="orders" icon={FileText} label="Orders" badge={approvals.filter(a => a.status === 'pending').length} activeTab={activeTab} navigate={navigate} />
           <SidebarItem id="inventory" icon={Package} label="Inventory" activeTab={activeTab} navigate={navigate} />
           <SidebarItem id="security" icon={Shield} label="Security & Privacy" activeTab={activeTab} navigate={navigate} />
@@ -579,7 +493,7 @@ function App() {
             </div>
             <Button variant="ghost" size="icon" className="relative" onClick={() => navigate('approvals')}>
               <Bell className="w-5 h-5" />
-              {stats.pendingApprovals > 0 && (
+              {stats?.pendingApprovals && stats.pendingApprovals > 0 && (
                 <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
                   {stats.pendingApprovals}
                 </span>
@@ -604,12 +518,12 @@ function App() {
                     <Card className="bg-gradient-to-br from-blue-50 to-blue-100 border-blue-200 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate('bots')}>
                       <CardHeader className="pb-2">
                         <CardDescription className="text-blue-700 flex items-center gap-2">
-                          <Bot className="w-4 h-4" /> Active Bots
+                          <BotIcon className="w-4 h-4" /> Active Bots
                         </CardDescription>
-                        <CardTitle className="text-3xl text-blue-800">{stats.activeBots}/{stats.totalBots}</CardTitle>
+                        <CardTitle className="text-3xl text-blue-800">{stats?.activeBots || 0}/{stats?.totalBots || 0}</CardTitle>
                       </CardHeader>
                       <CardContent>
-                        <p className="text-xs text-blue-600">{stats.totalCustomers} customers connected</p>
+                        <p className="text-xs text-blue-600">{stats?.totalCustomers || 0} customers connected</p>
                       </CardContent>
                     </Card>
                     <Card className="bg-gradient-to-br from-orange-50 to-orange-100 border-orange-200 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate('approvals')}>
@@ -617,7 +531,7 @@ function App() {
                         <CardDescription className="text-orange-700 flex items-center gap-2">
                           <CheckCheck className="w-4 h-4" /> Pending Approvals
                         </CardDescription>
-                        <CardTitle className="text-3xl text-orange-800">{stats.pendingApprovals}</CardTitle>
+                        <CardTitle className="text-3xl text-orange-800">{stats?.pendingApprovals || 0}</CardTitle>
                       </CardHeader>
                       <CardContent>
                         <p className="text-xs text-orange-600">Require admin action</p>
@@ -628,10 +542,10 @@ function App() {
                         <CardDescription className="text-green-700 flex items-center gap-2">
                           <FileText className="w-4 h-4" /> Bot-Handled Orders
                         </CardDescription>
-                        <CardTitle className="text-3xl text-green-800">{stats.botHandledOrders}</CardTitle>
+                        <CardTitle className="text-3xl text-green-800">{stats?.botHandledOrders || 0}</CardTitle>
                       </CardHeader>
                       <CardContent>
-                        <p className="text-xs text-green-600">{formatCurrency(stats.totalRevenue)} revenue</p>
+                        <p className="text-xs text-green-600">{formatCurrency(stats?.totalRevenue || 0)} revenue</p>
                       </CardContent>
                     </Card>
                     <Card className="bg-gradient-to-br from-purple-50 to-purple-100 border-purple-200 hover:shadow-lg transition-shadow">
@@ -639,7 +553,7 @@ function App() {
                         <CardDescription className="text-purple-700 flex items-center gap-2">
                           <MessageSquare className="w-4 h-4" /> Total Messages
                         </CardDescription>
-                        <CardTitle className="text-3xl text-purple-800">{stats.totalMessages.toLocaleString()}</CardTitle>
+                        <CardTitle className="text-3xl text-purple-800">{(stats?.totalMessages || 0).toLocaleString()}</CardTitle>
                       </CardHeader>
                       <CardContent>
                         <p className="text-xs text-purple-600">+12% from last week</p>
@@ -1004,7 +918,7 @@ function App() {
                               </p>
                               <div className="flex items-center gap-2 mt-1">
                                 <Badge variant="outline" className={`text-xs ${selectedConversation?.id === conv.id ? 'border-primary-foreground/30' : ''}`}>
-                                  {conv.platform}
+                                  {conv.platform || 'telegram'}
                                 </Badge>
                                 {conv.messages[conv.messages.length - 1]?.language && (
                                   <Badge variant="outline" className={`text-xs ${selectedConversation?.id === conv.id ? 'border-primary-foreground/30' : ''}`}>
@@ -1040,7 +954,7 @@ function App() {
                               </div>
                               <div className="flex items-center gap-2">
                                 <Badge variant={selectedConversation.status === 'waiting_approval' ? 'destructive' : 'default'}>
-                                  {selectedConversation.status.replace(/-/g, ' ')}
+                                  {selectedConversation.status?.replace(/-/g, ' ') || 'active'}
                                 </Badge>
                                 <Button variant="ghost" size="icon" onClick={() => toast.info('Calling...')}>
                                   <Phone className="w-4 h-4" />
@@ -1052,13 +966,13 @@ function App() {
                             <ScrollArea className="h-[calc(100vh-420px)] p-4">
                               <div className="space-y-4">
                                 {selectedConversation.messages.map((msg) => (
-                                  <div key={msg.id} className={`flex ${msg.type === 'customer' ? 'justify-start' : 'justify-end'}`}>
+                                  <div key={msg.id} className={`flex ${msg.sender === 'customer' ? 'justify-start' : 'justify-end'}`}>
                                     <div className={`max-w-[80%] rounded-2xl px-4 py-2 ${
-                                      msg.type === 'customer' 
+                                      msg.sender === 'customer' 
                                         ? 'bg-muted' 
-                                        : msg.type === 'bot'
+                                        : msg.sender === 'bot'
                                         ? 'bg-primary text-primary-foreground'
-                                        : msg.type === 'admin'
+                                        : msg.sender === 'admin'
                                         ? 'bg-green-100 text-green-800'
                                         : 'bg-yellow-100 text-yellow-800'
                                     }`}>
@@ -1066,7 +980,7 @@ function App() {
                                       {msg.translated && (
                                         <p className="text-xs opacity-70 mt-1">🌐 Translated from Hindi</p>
                                       )}
-                                      <p className={`text-xs mt-1 ${msg.type === 'customer' ? 'text-muted-foreground' : 'opacity-70'}`}>
+                                      <p className={`text-xs mt-1 ${msg.sender === 'customer' ? 'text-muted-foreground' : 'opacity-70'}`}>
                                         {new Date(msg.timestamp).toLocaleTimeString([], { 
                                           hour: '2-digit', 
                                           minute: '2-digit' 
@@ -1166,7 +1080,7 @@ function App() {
                               <TableCell>
                                 {order.botHandled ? (
                                   <div className="flex items-center gap-1">
-                                    <Bot className="w-3 h-3" />
+                                    <BotIcon className="w-3 h-3" />
                                     <span className="text-xs">Bot</span>
                                   </div>
                                 ) : (
@@ -1420,6 +1334,47 @@ function App() {
                 </div>
               )}
 
+              {/* COMMANDS */}
+              {activeTab === 'commands' && (
+                <div className="space-y-6">
+                  <div>
+                    <h2 className="text-2xl font-bold">Voice & Commands</h2>
+                    <p className="text-muted-foreground">Use voice input or direct commands to interact with the AI assistant</p>
+                  </div>
+
+                  <div className="grid gap-6">
+                    <VoiceInput 
+                      onTranscript={(text) => {
+                        // Add transcript to message input if conversation is selected
+                        if (selectedConversation) {
+                          const newMessage = {
+                            id: `msg-${Date.now()}`,
+                            sender: 'admin' as const,
+                            text: text,
+                            content: text,
+                            timestamp: new Date().toISOString(),
+                            type: 'admin' as const
+                          } as const;
+                          
+                          setConversations(prev => prev.map(conv => 
+                            conv.id === selectedConversation.id 
+                              ? { ...conv, messages: [...conv.messages, newMessage], lastMessageAt: new Date().toISOString() }
+                              : conv
+                          ));
+                        }
+                        toast.success('Voice input added!');
+                      }}
+                    />
+                    
+                    <DirectCommand 
+                      onResponse={(response) => {
+                        console.log('Command response:', response);
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+
               {/* SETTINGS */}
               {activeTab === 'settings' && (
                 <div className="space-y-6">
@@ -1648,9 +1603,9 @@ function App() {
               <div className="flex items-center justify-between p-3 border rounded-lg">
                 <div>
                   <p className="font-medium">Auto-approve small orders</p>
-                  <p className="text-sm text-muted-foreground">Below ₹{selectedBot.autoApproveThreshold}</p>
+                  <p className="text-sm text-muted-foreground">Below ₹{selectedBot.autoApproveThreshold || 5000}</p>
                 </div>
-                <Switch checked={selectedBot.autoApproveThreshold > 0} />
+                <Switch checked={Boolean(selectedBot.autoApproveThreshold && selectedBot.autoApproveThreshold > 0)} />
               </div>
               <div className="flex items-center justify-between p-3 border rounded-lg">
                 <div>
@@ -1710,21 +1665,27 @@ function App() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowAddBotDialog(false)}>Cancel</Button>
             <Button onClick={() => { 
-              toast.success('New bot added successfully'); 
-              setShowAddBotDialog(false);
-              setBots(prev => [...prev, { 
-                id: `bot-${Date.now()}`, 
-                name: 'New Bot', 
-                platform: 'whatsapp', 
-                status: 'connecting', 
-                apiKey: '****', 
-                connectedCustomers: 0, 
-                pendingApprovals: 0, 
-                lastActivity: new Date().toISOString(), 
+              setBots(prev => [...prev, {
+                botId: `bot-${Date.now()}`,
+                id: `bot-${Date.now()}`,
+                name: 'New WhatsApp Bot',
+                platform: 'whatsapp',
+                status: 'connecting',
+                connectedCustomers: 0,
+                totalMessages: 0,
+                capabilities: ['text', 'image', 'document'],
+                createdAt: new Date().toISOString(),
+                lastActive: new Date().toISOString(),
+                phoneNumber: '+1234567890',
+                apiKey: 'whatsapp-api-key',
+                pendingApprovals: 0,
+                lastActivity: new Date().toISOString(),
                 encryptionEnabled: true,
                 autoApproveThreshold: 5000,
-                voiceEnabled: true 
+                voiceEnabled: true
               }]);
+              toast.success('Bot added successfully'); 
+              setShowAddBotDialog(false);
             }}>
               <Plus className="w-4 h-4 mr-1" />
               Add Bot
@@ -1743,15 +1704,25 @@ function App() {
           <div className="space-y-4">
             <div>
               <label className="text-sm font-medium">Customer Name</label>
-              <Input placeholder="Enter customer name" className="mt-1" />
+              <Input 
+                placeholder="Enter customer name" 
+                className="mt-1"
+                value={orderForm.customerName}
+                onChange={(e) => setOrderForm(prev => ({ ...prev, customerName: e.target.value }))}
+              />
             </div>
             <div>
               <label className="text-sm font-medium">Phone Number</label>
-              <Input placeholder="+91-98765-XXXXX" className="mt-1" />
+              <Input 
+                placeholder="+91-98765-XXXXX" 
+                className="mt-1"
+                value={orderForm.customerPhone}
+                onChange={(e) => setOrderForm(prev => ({ ...prev, customerPhone: e.target.value }))}
+              />
             </div>
             <div>
               <label className="text-sm font-medium">Product</label>
-              <Select>
+              <Select value={orderForm.productId} onValueChange={(value) => setOrderForm(prev => ({ ...prev, productId: value }))}>
                 <SelectTrigger className="mt-1">
                   <SelectValue placeholder="Select product" />
                 </SelectTrigger>
@@ -1764,13 +1735,53 @@ function App() {
             </div>
             <div>
               <label className="text-sm font-medium">Quantity</label>
-              <Input type="number" placeholder="Enter quantity" className="mt-1" />
+              <Input 
+                type="number" 
+                placeholder="Enter quantity" 
+                className="mt-1"
+                value={orderForm.quantity}
+                onChange={(e) => setOrderForm(prev => ({ ...prev, quantity: parseInt(e.target.value) || 1 }))}
+              />
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowOrderDialog(false)}>Cancel</Button>
             <Button onClick={() => { 
+              if (!orderForm.customerName || !orderForm.customerPhone || !orderForm.productId) {
+                toast.error('Please fill all required fields');
+                return;
+              }
+              
+              const product = inventory.find(item => item.id === orderForm.productId);
+              if (!product) {
+                toast.error('Please select a valid product');
+                return;
+              }
+              
+              const newOrder = {
+                id: `ORD-${Date.now()}`,
+                customerName: orderForm.customerName,
+                customerPhone: orderForm.customerPhone,
+                items: [{
+                  name: product.name,
+                  quantity: orderForm.quantity,
+                  price: product.price
+                }],
+                total: product.price * orderForm.quantity,
+                gstAmount: Math.round(product.price * orderForm.quantity * 0.18),
+                status: 'pending',
+                botHandled: false,
+                createdAt: new Date().toISOString()
+              };
+              
+              setOrders(prev => [newOrder, ...prev]);
               toast.success('Order created successfully'); 
+              setOrderForm({
+                customerName: '',
+                customerPhone: '',
+                productId: '',
+                quantity: 1
+              });
               setShowOrderDialog(false);
             }}>
               <Plus className="w-4 h-4 mr-1" />

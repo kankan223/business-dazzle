@@ -10,171 +10,181 @@
 Bharat Biz-Agent is a comprehensive business automation platform designed specifically for Indian Small and Medium Businesses (SMBs). It combines:
 
 - 🤖 **WhatsApp & Telegram Bots** - Automated customer interactions
-- 👨‍💼 **Admin Dashboard** - Complete control and monitoring
+- 👨‍💼 **Admin Dashboard** - Complete control and monitoring  
 - ✅ **Approval Workflows** - Human-in-the-loop for sensitive actions
 - 🔒 **End-to-End Encryption** - Data safety and privacy
 - 🗣️ **Multilingual Support** - Hindi, Hinglish, and English
 - 📊 **Business Analytics** - Real-time insights
+- 🧠 **AI-Powered** - Google Gemini AI for intelligent responses
+- 💾 **Database Integration** - MongoDB for data persistence
 
 ## 🚀 Quick Start
 
-### Using Docker (Recommended)
+### Prerequisites
+
+- Node.js 18+
+- MongoDB 5.0+
+- Google Gemini API Key (Free)
+
+### Setup Steps
 
 ```bash
 # 1. Clone the repository
 git clone https://github.com/kankan223/business-dazzle.git
-cd business-dazzle
+cd business-dazzle/app
 
-# 2. Copy environment file
+# 2. Install dependencies
+npm install
+
+# 3. Set up environment variables
 cp .env.example .env
+cp server/.env.example server/.env
 
-# 3. Edit .env with your credentials
-nano .env
+# 4. Get your Gemini API Key (Free)
+# Visit: https://makersuite.google.com/app/apikey
+# Add to server/.env: GEMINI_API_KEY=your_key_here
 
-# 4. Start with Docker Compose
-docker-compose up -d
+# 5. Set up Telegram Bot (Optional)
+# Message @BotFather on Telegram -> /newbot
+# Add to server/.env: TELEGRAM_BOT_TOKEN=your_token_here
 
-# 5. Access the application
-# Frontend: http://localhost
-# API: http://localhost/api
-```
+# 6. Start MongoDB
+mongod
 
-### Manual Setup
-
-```bash
-# Frontend
-cd bharat-biz-agent
-npm install
-npm run build
-
-# Backend
+# 7. Start the backend server
 cd server
-npm install
-npm start
+node index.js
+
+# 8. Start the frontend (in another terminal)
+cd ..
+npm run dev
 ```
+
+### Access the Application
+
+- **Frontend**: http://localhost:5173
+- **Backend API**: http://localhost:3001
+- **Health Check**: http://localhost:3001/health
 
 ## 🔧 Configuration
 
-### WhatsApp Business API Setup
+### Required Environment Variables
+
+Create `server/.env` with:
+
+```env
+# Database
+MONGODB_URI=mongodb://localhost:27017/bharat_biz_agent
+
+# AI Service (Required - Free)
+GEMINI_API_KEY=your_gemini_api_key_here
+
+# Security
+ADMIN_API_KEY=your_admin_api_key_here
+ENCRYPTION_KEY=your_32_byte_encryption_key_here
+
+# Server
+PORT=3001
+FRONTEND_URL=http://localhost:5173
+```
+
+### Optional: Telegram Bot Setup
+
+1. Message @BotFather on Telegram
+2. Create a new bot with `/newbot`
+3. Copy the bot token
+4. Add to `server/.env`: `TELEGRAM_BOT_TOKEN=your_token_here`
+
+### Optional: WhatsApp Business API
 
 1. Create a Meta Business account: https://business.facebook.com/
 2. Set up WhatsApp Business API
-3. Get your API Key, Phone Number ID, and Verify Token
-4. Add to `.env` file
-
-### Telegram Bot Setup
-
-1. Message @BotFather on Telegram
-2. Create a new bot
-3. Copy the bot token
-4. Add to `.env` file
-5. Set webhook URL: `https://your-domain.com/webhooks/telegram`
+3. Add credentials to `server/.env`
 
 ## 📁 Project Structure
 
 ```
-bharat-biz-agent/
+app/
 ├── src/                    # Frontend React app
 │   ├── App.tsx            # Main dashboard
-│   └── ...
+│   ├── services/          # API service layer
+│   └── components/        # UI components
 ├── server/                 # Backend Node.js server
 │   ├── index.js           # Bot handlers & API
-│   └── package.json
-├── Dockerfile             # Docker build
-├── docker-compose.yml     # Docker orchestration
-├── nginx.conf             # Nginx configuration
-└── .env.example           # Environment template
+│   ├── database.js         # MongoDB operations
+│   ├── gemini-service.js  # AI service
+│   └── .env.example       # Environment template
+└── .env.example           # Frontend environment template
 ```
 
-## 🛡️ Security Features
+## 🤖 AI Features
 
-- ✅ **AES-256 Encryption** - All messages encrypted at rest
-- ✅ **TLS/SSL** - Secure data in transit
+### Google Gemini Integration
+
+- **Free to use** - No cost for basic usage
+- **Multilingual** - Understands English, Hindi, Hinglish
+- **Context-aware** - Remembers conversation history
+- **Smart approvals** - Automatically detects when admin approval is needed
+- **Business insights** - Generates recommendations from data
+
+### AI Capabilities
+
+| Feature | Description |
+|---------|-------------|
+| Customer Support | Handle inquiries automatically |
+| Order Processing | Take orders and check inventory |
+| Approval Detection | Identify sensitive requests |
+| Language Translation | Support multiple Indian languages |
+| Business Analytics | Generate insights from data |
+
+## 📊 Real-time Features
+
+- **Live Dashboard** - Real-time updates via WebSocket
+- **Conversation Monitoring** - Track all bot interactions
+- **Approval Queue** - Review and approve sensitive actions
+- **Security Logs** - Audit trail of all activities
+- **Business Metrics** - Performance analytics
+
+## �️ Security Features
+
+- ✅ **AES-256 Encryption** - All messages encrypted
+- ✅ **Database Security** - MongoDB with authentication
 - ✅ **Rate Limiting** - Prevent abuse
-- ✅ **Helmet.js** - Security headers
 - ✅ **Input Validation** - Sanitize all inputs
 - ✅ **Audit Logging** - Track all actions
-- ✅ **2FA Support** - Two-factor authentication
-
-## 🤖 Bot Capabilities
-
-### Customer-Facing Features
-
-| Feature | WhatsApp | Telegram | Description |
-|---------|----------|----------|-------------|
-| Order Taking | ✅ | ✅ | Place orders via chat |
-| Price Inquiry | ✅ | ✅ | Check product prices |
-| Invoice Generation | ✅ | ✅ | Auto-generate invoices |
-| Inventory Check | ✅ | ✅ | Real-time stock status |
-| Voice Messages | ✅ | ✅ | Audio communication |
-| Payment Info | ✅ | ✅ | UPI/Bank details |
-
-### Admin Features
-
-- 📊 Real-time dashboard
-- ✅ Approve/reject bot actions
-- 💬 Monitor conversations
-- 📦 Manage inventory
-- 🔐 Security audit logs
-- 📈 Analytics & reports
-
-## 🗣️ Supported Languages
-
-- **English** - Full support
-- **Hindi** - Devanagari script
-- **Hinglish** - Romanized Hindi (e.g., "Namaste, kaise ho?")
+- ✅ **API Key Protection** - Secure admin access
 
 ## 📝 API Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/approvals` | GET | List pending approvals |
-| `/api/approvals/:id` | POST | Approve/reject request |
+| `/api/bots` | GET | List all bots |
 | `/api/conversations` | GET | List all conversations |
+| `/api/approvals` | GET | List pending approvals |
+| `/api/approvals/:id/update` | POST | Approve/reject request |
 | `/api/stats` | GET | System statistics |
+| `/api/insights` | GET | AI-generated insights |
+| `/api/ai/chat` | POST | Test AI chat |
 | `/health` | GET | Health check |
 
-## 🐳 Docker Commands
+## � Troubleshooting
+
+### Common Issues
+
+1. **Build Fails**: Make sure all dependencies are installed
+2. **Database Connection**: Check MongoDB is running and URI is correct
+3. **AI Not Working**: Verify Gemini API key is valid
+4. **Telegram Bot**: Check bot token and webhook setup
+
+### Debug Mode
 
 ```bash
-# Build and start
-docker-compose up -d
+# Enable debug logging
+DEBUG=* npm run dev
 
-# View logs
-docker-compose logs -f
-
-# Stop
-docker-compose down
-
-# Rebuild
-docker-compose up -d --build
-
-# Shell access
-docker exec -it bharat-biz-agent sh
+# Check server logs
+cd server && node index.js
 ```
-
-## 🔍 Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `ENCRYPTION_KEY` | ✅ | AES-256 encryption key |
-| `WHATSAPP_API_KEY` | ⚠️ | WhatsApp Business API |
-| `WHATSAPP_PHONE_NUMBER_ID` | ⚠️ | WhatsApp phone ID |
-| `WHATSAPP_VERIFY_TOKEN` | ⚠️ | Webhook verification |
-| `TELEGRAM_BOT_TOKEN` | ⚠️ | Telegram bot token |
-| `SUPABASE_URL` | ❌ | Database URL (optional) |
-| `SUPABASE_KEY` | ❌ | Database key (optional) |
-
-## 📊 Screenshots
-
-### Admin Dashboard
-![Dashboard](docs/dashboard.png)
-
-### Bot Management
-![Bots](docs/bots.png)
-
-### Approval Workflow
-![Approvals](docs/approvals.png)
 
 ## 🤝 Contributing
 
@@ -190,16 +200,16 @@ MIT License - see [LICENSE](LICENSE) file
 
 ## 🙏 Acknowledgments
 
-- Built for Indian SMBs 🇮🇳
-- Inspired by the need for accessible business tools
-- Powered by open-source technologies
+- Google Gemini AI for powering the intelligence
+- MongoDB for data storage
+- Open-source community for tools and libraries
 
 ## 📞 Support
 
-- Email: support@bharatbiz.com
-- WhatsApp: +91-XXXXX-XXXXX
-- Telegram: @BharatBizSupport
+- Create an issue on GitHub for bugs
+- Check the troubleshooting section above
+- Review the API documentation
 
 ---
 
-**Made with ❤️ for Bharat**
+**Made with ❤️ for Bharat** 🇮🇳

@@ -15,7 +15,6 @@ const fetch = (...args) =>
 
 require('dotenv').config();
 
-
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -23,24 +22,179 @@ const rateLimit = require('express-rate-limit');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
+const socketIo = require('socket.io');
+
+// Import database and AI services
+const { 
+  connectDatabase, 
+  getDatabase, 
+  BotOperations, 
+  ConversationOperations, 
+  ApprovalOperations, 
+  CustomerOperations, 
+  AuditOperations 
+} = require('./database');
+const geminiService = require('./gemini-service');
+const SpeechToTextService = require('./speech-service');
+const { 
+  securityMiddleware, 
+  createEnhancedRateLimit, 
+  validationSchemas, 
+  validateInput, 
+  privacyControls, 
+  securityHeaders 
+} = require('./security-enhancements');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+// Create uploads directory for speech-to-text
+if (!fs.existsSync('uploads')) {
+  fs.mkdirSync('uploads');
+}
+
+// Initialize services
+const speechService = new SpeechToTextService();
+
+// Create HTTP server for WebSocket support
+const server = http.createServer(app);
+const io = socketIo(server, {
+  cors: {
+    origin: process.env.FRONTEND_URL || "http://localhost:5173",
+    methods: ["GET", "POST"]
+  }
+});
+
+// WebSocket connection handling
+io.on('connection', (socket) => {
+  console.log('🔌 Admin dashboard connected:', socket.id);
+  
+  // Join admin room for real-time updates
+  socket.join('admin_room');
+  
+  // Send initial data to newly connected admin
+  socket.emit('initial_data', {
+    timestamp: new Date().toISOString(),
+    message: 'Connected to Bharat Biz-Agent dashboard'
+  });
+  
+  // Handle real-time message updates
+  socket.on('admin_message', async (data) => {
+    try {
+      // Validate admin message
+      const validation = validateInput(data, validationSchemas.customerMessage);
+      if (!validation.isValid) {
+        socket.emit('error', { 
+          type: 'validation_error', 
+          details: validation.errors 
+        });
+        return;
+      }
+      
+      // Broadcast to all admin dashboards
+      broadcastToAdmins('message_update', {
+        ...data,
+        timestamp: new Date().toISOString(),
+        id: socket.id
+      });
+      
+      // Log the admin action
+      await AuditOperations.log({
+        action: 'admin_message',
+        details: privacyControls.maskSensitiveData(data),
+        userId: data.userId || 'admin',
+        ipAddress: socket.handshake.address,
+        severity: 'info'
+      });
+      
+    } catch (error) {
+      console.error('WebSocket message error:', error);
+      socket.emit('error', { 
+        type: 'message_error', 
+        message: 'Failed to process message' 
+      });
+    }
+  });
+  
+  // Handle conversation status updates
+  socket.on('conversation_status', async (data) => {
+    try {
+      broadcastToAdmins('conversation_update', {
+        ...data,
+        timestamp: new Date().toISOString()
+      });
+      
+      await AuditOperations.log({
+        action: 'conversation_update',
+        details: { conversationId: data.conversationId, status: data.status },
+        userId: 'admin',
+        ipAddress: socket.handshake.address,
+        severity: 'info'
+      });
+      
+    } catch (error) {
+      console.error('Conversation status error:', error);
+    }
+  });
+  
+  socket.on('disconnect', () => {
+    console.log('🔌 Admin dashboard disconnected:', socket.id);
+    broadcastToAdmins('admin_disconnected', {
+      socketId: socket.id,
+      timestamp: new Date().toISOString()
+    });
+  });
+});
+
+// Function to broadcast updates to admin dashboard
+function broadcastToAdmins(event, data) {
+  console.log(`📡 Broadcasting ${event} to admins:`, data);
+  io.to('admin_room').emit(event, data);
+}
+
+// Enhanced message broadcasting for bot messages
+async function broadcastMessageToAdmins(messageData) {
+  const broadcastData = {
+    ...messageData,
+    timestamp: new Date().toISOString(),
+    broadcastId: crypto.randomBytes(16).toString('hex')
+  };
+  
+  broadcastToAdmins('new_message', broadcastData);
+  
+  // Also update conversation list if applicable
+  if (messageData.conversationId) {
+    broadcastToAdmins('conversation_updated', {
+      conversationId: messageData.conversationId,
+      lastMessage: messageData,
+      timestamp: new Date().toISOString()
+    });
+  }
+}
 
 
 const TelegramBot = require('node-telegram-bot-api');
 
 // 🔥 CREATE TELEGRAM BOT (safe for dev + test)
-const telegramBot = new TelegramBot(
-  process.env.TELEGRAM_BOT_TOKEN,
-  {
-    polling: process.env.NODE_ENV !== 'test'
-  }
-);
+let telegramBot = null;
+if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_BOT_TOKEN !== 'your_telegram_bot_token_here') {
+  telegramBot = new TelegramBot(
+    process.env.TELEGRAM_BOT_TOKEN,
+    {
+      polling: process.env.NODE_ENV !== 'test'
+    }
+  );
+  console.log('✅ Telegram bot configured');
+} else {
+  console.log('⚠️  Telegram bot not configured (optional)');
+}
 
 
 
-telegramBot.on('message', async (msg) => {
+// Telegram message handler (only if bot is configured)
+if (telegramBot) {
+  telegramBot.on('message', async (msg) => {
   try {
     // 1️⃣ Validate
     if (!validateTelegramMessage(msg)) return;
@@ -77,19 +231,12 @@ telegramBot.on('message', async (msg) => {
   }
 });
 
-
-
-
-telegramBot.on('polling_error', (err) => {
-  if (process.env.NODE_ENV !== 'test') {
-    console.error('🚨 Telegram polling error:', err.message);
-  }
-});
-
-
-
-if (!process.env.TELEGRAM_BOT_TOKEN) {
-  throw new Error("❌ TELEGRAM_BOT_TOKEN missing in .env");
+  // Telegram polling error handler
+  telegramBot.on('polling_error', (err) => {
+    if (process.env.NODE_ENV !== 'test') {
+      console.error('🚨 Telegram polling error:', err);
+    }
+  });
 }
 
 
@@ -155,34 +302,33 @@ app.use(helmet({
   }
 }));
 
-// CORS configuration
+app.use(securityHeaders);
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost',
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key']
+  origin: process.env.FRONTEND_URL || "http://localhost:5173",
+  credentials: true
 }));
-
-// Rate limiting - stricter for webhooks
-const webhookLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute
-  max: 60, // 60 requests per minute for webhooks
-  message: { error: 'Too many requests, please try again later' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // 100 requests per 15 minutes
-  message: { error: 'API rate limit exceeded' },
-});
-
-app.use('/webhooks', webhookLimiter);
-app.use('/api', apiLimiter);
-
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Enhanced rate limiting
+const apiLimiter = createEnhancedRateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // 100 requests per 15 minutes
+  message: { error: 'API rate limit exceeded. Please try again later.' }
+});
+
+const commandLimiter = createEnhancedRateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 30, // 30 commands per minute
+  message: { error: 'Too many commands. Please wait before trying again.' }
+});
+
+const speechLimiter = createEnhancedRateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 10, // 10 speech requests per minute
+  message: { error: 'Too many speech requests. Please wait before trying again.' }
+});
+app.use('/api', apiLimiter);
 
 // ==================== ENCRYPTION UTILITIES ====================
 
@@ -571,9 +717,29 @@ async function handleTelegramMessage(message, clientIp) {
   if (message.text) {
     content = message.text;
   } else if (message.voice) {
-    content = '[Voice Message]';
-    messageType = 'voice';
-    mediaUrl = message.voice.file_id;
+    // Handle voice message
+    try {
+      const voiceFile = await telegramBot.getFileLink(message.voice.file_id);
+      const response = await fetch(voiceFile);
+      const buffer = await response.buffer();
+      
+      // Save temporarily for speech-to-text
+      const tempPath = `uploads/voice_${Date.now()}.ogg`;
+      require('fs').writeFileSync(tempPath, buffer);
+      
+      // Transcribe voice message
+      const transcription = await speechService.transcribeAudio(tempPath, 'en-IN');
+      content = transcription;
+      messageType = 'voice';
+      
+      // Clean up temp file
+      require('fs').unlinkSync(tempPath);
+      
+    } catch (error) {
+      console.error('Voice processing error:', error);
+      content = '[Voice Message - Could not transcribe]';
+      messageType = 'voice';
+    }
   } else if (message.audio) {
     content = '[Audio]';
     messageType = 'audio';
@@ -590,72 +756,109 @@ async function handleTelegramMessage(message, clientIp) {
 
   const language = detectLanguage(content);
 
-  if (!botConversations.has(chatId)) {
-    botConversations.set(chatId, {
-      customerPhone: chatId,
-      customerName: from.first_name + (from.last_name ? ' ' + from.last_name : ''),
+  try {
+    // Get or create customer
+    const customer = {
+      phone: chatId.toString(),
+      name: from.first_name + (from.last_name ? ' ' + from.last_name : ''),
       platform: 'telegram',
-      messages: [],
-      context: {},
       language
-    });
-  }
+    };
+    await CustomerOperations.upsert(customer);
 
-  const conversation = botConversations.get(chatId);
-  conversation.messages.push({
-    id: messageId,
-    type: 'customer',
-    content: encrypt(content),
-    timestamp: new Date(),
-    mediaUrl: mediaUrl ? encrypt(mediaUrl) : null,
-    messageType,
-    language
-  });
-
-  const response = await processBotResponse(content, conversation, 'telegram', language);
-
-  if (response.requiresApproval) {
-    const approvalId = `app-${Date.now()}`;
-    const bot = botInstances.get('bot-2');
-
-    pendingApprovals.set(approvalId, {
-    id: approvalId,
-    botId: 'bot-2',
-    botName: bot?.name || 'Support Bot',
-    chatId,
-    platform: 'telegram',
-    language,
-    customerName: from.first_name,
-    action: response.action,
-    details: response.details,
-    requestedAt: new Date(),
-    priority: response.priority || 'medium',
-    status: 'pending',
-    locked: true // 🔒 THIS WAS MISSING
-  });
-
-
-    if (bot) {
-      bot.pendingApprovals = (bot.pendingApprovals || 0) + 1;
+    // Get or create conversation
+    let conversation = await ConversationOperations.getByCustomerId(chatId.toString());
+    if (!conversation || conversation.length === 0) {
+      await ConversationOperations.upsert({
+        customerId: chatId.toString(),
+        botId: 'telegram-bot-001',
+        customerName: customer.name,
+        customerPhone: customer.phone,
+        messages: []
+      });
+      conversation = await ConversationOperations.getByCustomerId(chatId.toString());
     }
 
-    logSecurityEvent(
-      'Approval Request Created',
-      'bot-2',
-      clientIp,
-      'info',
-      `${response.action} for ${chatId}`
-    );
+    // Add customer message to conversation
+    await ConversationOperations.addMessage(chatId.toString(), 'telegram-bot-001', {
+      sender: 'customer',
+      text: content,
+      content: content, // For backward compatibility
+      timestamp: new Date().toISOString(),
+      type: messageType,
+      translated: language !== 'en'
+    });
 
-    await sendTelegramMessage(chatId, translations[language].approvalPending);
-  } else {
-    await sendTelegramMessage(
-      chatId,
-      response.message?.text?.body || response.message
-    );
+    // Get conversation history for AI context
+    const conversationData = conversation[0] || { messages: [] };
+    const customerContext = {
+      name: customer.name,
+      phone: customer.phone,
+      platform: 'telegram',
+      language
+    };
+
+    // Process with AI using the same function as web commands
+    const aiResponse = await processDirectCommand(content, 'telegram', chatId.toString());
+    
+    // Add bot response to conversation
+    await ConversationOperations.addMessage(chatId.toString(), 'telegram-bot-001', {
+      sender: 'bot',
+      text: aiResponse.response || aiResponse.text,
+      content: aiResponse.response || aiResponse.text, // For backward compatibility
+      timestamp: new Date().toISOString(),
+      type: 'text'
+    });
+
+    // Update bot metrics
+    await BotOperations.incrementMetrics('telegram-bot-001', {
+      totalMessages: 2, // Customer + bot message
+      connectedCustomers: 1
+    });
+
+    // Handle approval requirements
+    if (aiResponse.approvalNeeded) {
+      const approval = await ApprovalOperations.create({
+        botId: 'telegram-bot-001',
+        botName: 'Telegram Assistant',
+        customerName: customer.name,
+        customerPhone: customer.phone,
+        action: 'customer_request',
+        details: {
+          message: content,
+          aiResponse: aiResponse.response,
+          suggestedActions: aiResponse.suggestedActions
+        },
+        priority: 'medium'
+      });
+
+      // Broadcast to admin dashboard
+      broadcastToAdmins('new_approval', approval);
+
+      // Log the action
+      await AuditOperations.log('approval_requested', {
+        approvalId: approval.id,
+        customerPhone: customer.phone,
+        message: content
+      });
+
+      await telegramBot.sendMessage(chatId, "⏳ Your request requires admin approval. We'll get back to you shortly.");
+    } else {
+      // Send AI response directly
+      await telegramBot.sendMessage(chatId, aiResponse.response);
+    }
+
+    // Broadcast new message to admin dashboard
+    const updatedConversation = await ConversationOperations.getByCustomerId(chatId.toString());
+    if (updatedConversation && updatedConversation.length > 0) {
+      broadcastToAdmins('new_message', updatedConversation[0]);
+    }
+
+  } catch (error) {
+    console.error('Error handling Telegram message:', error);
+    await telegramBot.sendMessage(chatId, "Sorry, I'm having trouble processing your message right now. Please try again later.");
   }
 }
-
 
 
 async function handleTelegramCallback(callbackQuery, clientIp) {
@@ -681,7 +884,7 @@ async function handleTelegramCallback(callbackQuery, clientIp) {
 }
 
 async function sendTelegramMessage(chatId, text, options = {}) {
-  if (!process.env.TELEGRAM_BOT_TOKEN) {
+  if (!process.env.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN === 'your_telegram_bot_token_here') {
     console.log('⚠️ Telegram not configured, simulating message:', text);
     return { success: true, simulated: true };
   }
@@ -717,7 +920,7 @@ async function sendTelegramMessage(chatId, text, options = {}) {
 }
 
 async function answerTelegramCallback(callbackQueryId) {
-  if (!process.env.TELEGRAM_BOT_TOKEN) return;
+  if (!process.env.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN === 'your_telegram_bot_token_here') return;
   
   try {
     await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
@@ -1086,6 +1289,244 @@ app.post('/api/bots/:id/toggle', (req, res) => {
   res.json({ success: true, bot });
 });
 
+// Process direct commands
+async function processDirectCommand(command, platform, userId) {
+  try {
+    // Check if it's a system command
+    if (command.startsWith('/')) {
+      return await handleSystemCommand(command, platform, userId);
+    }
+    
+    // Process with AI
+    const aiResponse = await geminiService.processCustomerMessage(command, {
+      platform: platform,
+      userId: userId,
+      type: 'direct_command'
+    });
+    
+    return aiResponse;
+  } catch (error) {
+    console.error('Direct command processing error:', error);
+    return {
+      text: "I'm sorry, I'm having trouble processing your command right now. Please try again later.",
+      requiresApproval: false
+    };
+  }
+}
+
+// Handle system commands
+async function handleSystemCommand(command, platform, userId) {
+  const cmd = command.toLowerCase().trim();
+  
+  switch (cmd) {
+    case '/help':
+      return {
+        text: `🤖 *Bharat Biz-Agent Commands*
+
+📋 *Business Commands:*
+• /price [product] - Check product price
+• /stock [product] - Check inventory
+• /order [product] [quantity] - Place order
+• /status - Check order status
+
+🔧 *System Commands:*
+• /help - Show this help
+• /ping - Check bot status
+• /language - Change language
+• /voice - Enable voice mode
+
+💬 *AI Commands:*
+Just type your question in English, Hindi, Hinglish, or any Indian language!
+
+📞 *Need Help?*
+Contact admin for assistance.`,
+        requiresApproval: false
+      };
+      
+    case '/ping':
+      return {
+        text: '🏓 Pong! Bot is working perfectly! 🚀',
+        requiresApproval: false
+      };
+      
+    case '/language':
+      return {
+        text: '🌐 *Language Options*\n\n• English (Default)\n• हिन्दी (Hindi)\n• हिंग्लिश (Hinglish)\n• ಕನ್ನಡ (Kannada)\n• தமிழ் (Tamil)\n• తెలుగు (Telugu)\n\nType in any language - I understand! 🤗',
+        requiresApproval: false
+      };
+      
+    case '/voice':
+      return {
+        text: '🎤 *Voice Mode Enabled*\n\nSend me a voice message and I\'ll transcribe it for you!\n\nSupported languages: English, Hindi, Kannada, Tamil, Telugu, Bengali, Marathi, Gujarati, Punjabi, Malayalam',
+        requiresApproval: false
+      };
+      
+    default:
+      return {
+        text: `❓ Unknown command: ${command}\n\nType /help to see available commands.`,
+        requiresApproval: false
+      };
+  }
+}
+
+// Speech-to-text endpoint
+app.post('/api/speech-to-text', speechLimiter, speechService.upload.single('audio'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No audio file provided' });
+    }
+
+    const { language } = req.body;
+    
+    // Validate file
+    if (req.file.size > 10 * 1024 * 1024) { // 10MB limit
+      return res.status(400).json({ error: 'Audio file too large. Maximum size is 10MB' });
+    }
+    
+    // Validate language
+    const allowedLanguages = ['en-IN', 'hi-IN', 'kn-IN', 'ta-IN', 'te-IN', 'bn-IN', 'mr-IN', 'gu-IN', 'pa-IN', 'ml-IN'];
+    if (language && !allowedLanguages.includes(language)) {
+      return res.status(400).json({ 
+        error: 'Unsupported language',
+        allowedLanguages: allowedLanguages
+      });
+    }
+    
+    const transcription = await speechService.transcribeAudio(req.file.path, language || 'en-IN');
+    
+    // Check for PII in transcription
+    if (privacyControls.containsPII(transcription)) {
+      await AuditOperations.log({
+        action: 'pii_in_speech',
+        details: { 
+          transcription: privacyControls.maskSensitiveData({ text: transcription }),
+          language: language || 'en-IN',
+          fileSize: req.file.size
+        },
+        userId: req.body.userId || 'anonymous',
+        ipAddress: req.ip,
+        severity: 'warning'
+      });
+      
+      // Clean up the uploaded file
+      fs.unlinkSync(req.file.path);
+      
+      return res.status(400).json({
+        error: 'Personal information detected in audio',
+        message: 'Please remove personal information from audio and try again'
+      });
+    }
+    
+    // Log speech processing (anonymized)
+    await AuditOperations.log({
+      action: 'speech_to_text',
+      details: privacyControls.anonymizeForAnalytics({
+        language: language || 'en-IN',
+        fileSize: req.file.size,
+        duration: 'unknown', // Could be extracted from audio metadata
+        timestamp: new Date().toISOString()
+      }),
+      userId: req.body.userId || 'anonymous',
+      ipAddress: req.ip,
+      severity: 'info'
+    });
+    
+    res.json({
+      success: true,
+      transcription: transcription,
+      language: language || 'en-IN'
+    });
+  } catch (error) {
+    console.error('Speech-to-text error:', error);
+    
+    // Clean up the uploaded file even on error
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
+    
+    res.status(500).json({ 
+      error: 'Failed to transcribe audio',
+      message: error.message 
+    });
+  }
+});
+
+// Direct command services endpoint
+app.post('/api/direct-command', commandLimiter, async (req, res) => {
+  try {
+    const { command, platform = 'web', userId } = req.body;
+    
+    // Validate input
+    const validation = validateInput(
+      { command, platform, userId }, 
+      validationSchemas.botCommand
+    );
+    
+    if (!validation.isValid) {
+      return res.status(400).json({ 
+        error: 'Invalid input', 
+        details: validation.errors 
+      });
+    }
+    
+    // Sanitize command
+    const sanitizedCommand = validation.sanitizedData.command;
+    
+    // Check for PII in command
+    if (privacyControls.containsPII(sanitizedCommand)) {
+      await AuditOperations.log('pii_detected', { 
+        command: sanitizedCommand, 
+        platform, 
+        userId,
+        ip: req.ip || req.connection.remoteAddress || req.socket.remoteAddress
+      }, userId || 'anonymous');
+      
+      return res.status(400).json({
+        error: 'Personal information detected in command',
+        message: 'Please remove personal information and try again'
+      });
+    }
+    
+    // Process direct command
+    const response = await processDirectCommand(sanitizedCommand, platform, userId);
+    
+    // Log command for analytics (anonymized)
+    await AuditOperations.log('direct_command', privacyControls.anonymizeForAnalytics({
+        command: sanitizedCommand,
+        platform,
+        response: response,
+        timestamp: new Date().toISOString()
+      }), userId || 'anonymous');
+    
+    res.json({
+      success: true,
+      command: sanitizedCommand,
+      response: response,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Direct command error:', error);
+    res.status(500).json({ 
+      error: 'Failed to process command',
+      message: error.message 
+    });
+  }
+});
+
+// Get supported languages
+app.get('/api/speech-languages', (req, res) => {
+  try {
+    const languages = speechService.getSupportedLanguages();
+    res.json({
+      success: true,
+      languages: languages
+    });
+  } catch (error) {
+    console.error('Languages error:', error);
+    res.status(500).json({ error: 'Failed to get languages' });
+  }
+});
+
 // Health check
 app.get('/health', (req, res) => {
   res.json({ 
@@ -1094,9 +1535,150 @@ app.get('/health', (req, res) => {
     version: '1.0.0',
     services: {
       whatsapp: process.env.WHATSAPP_API_KEY ? 'configured' : 'not_configured',
-      telegram: process.env.TELEGRAM_BOT_TOKEN ? 'configured' : 'not_configured'
+      telegram: (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_BOT_TOKEN !== 'your_telegram_bot_token_here') ? 'configured' : 'not_configured'
     }
   });
+});
+
+// ==================== DATABASE API ENDPOINTS ====================
+
+// Get bots from database
+app.get('/api/bots', async (req, res) => {
+  try {
+    const bots = await BotOperations.getAll();
+    res.json(bots);
+  } catch (error) {
+    console.error('Error fetching bots:', error);
+    res.status(500).json({ error: 'Failed to fetch bots' });
+  }
+});
+
+// Get conversations from database
+app.get('/api/conversations', async (req, res) => {
+  try {
+    const conversations = await ConversationOperations.getAll();
+    res.json(conversations);
+  } catch (error) {
+    console.error('Error fetching conversations:', error);
+    res.status(500).json({ error: 'Failed to fetch conversations' });
+  }
+});
+
+// Get approvals from database
+app.get('/api/approvals', async (req, res) => {
+  try {
+    const approvals = await ApprovalOperations.getAll();
+    res.json(approvals);
+  } catch (error) {
+    console.error('Error fetching approvals:', error);
+    res.status(500).json({ error: 'Failed to fetch approvals' });
+  }
+});
+
+// Update approval status
+app.post('/api/approvals/:id/update', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, resolvedBy } = req.body;
+    
+    await ApprovalOperations.updateStatus(id, status, resolvedBy);
+    
+    // Broadcast update to admin dashboard
+    broadcastToAdmins('approval_updated', { id, status, resolvedBy });
+    
+    // Log the action
+    await AuditOperations.log('approval_updated', { approvalId: id, status }, resolvedBy);
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error updating approval:', error);
+    res.status(500).json({ error: 'Failed to update approval' });
+  }
+});
+
+// Get business stats from database
+app.get('/api/stats', async (req, res) => {
+  try {
+    const bots = await BotOperations.getAll();
+    const conversations = await ConversationOperations.getAll();
+    const approvals = await ApprovalOperations.getAll();
+    const pendingApprovals = approvals.filter(a => a.status === 'pending');
+    
+    const stats = {
+      totalBots: bots.length,
+      activeBots: bots.filter(b => b.status === 'active').length,
+      pendingApprovals: pendingApprovals.length,
+      totalCustomers: conversations.length,
+      totalMessages: conversations.reduce((sum, c) => sum + (c.messages?.length || 0), 0),
+      botHandledOrders: 0, // Will be implemented with orders collection
+      revenue: 0, // Will be calculated from orders
+      activeBots: bots.filter(b => b.status === 'active').length
+    };
+    
+    res.json(stats);
+  } catch (error) {
+    console.error('Error fetching stats:', error);
+    res.status(500).json({ error: 'Failed to fetch stats' });
+  }
+});
+
+// Get AI-powered business insights
+app.get('/api/insights', async (req, res) => {
+  try {
+    const bots = await BotOperations.getAll();
+    const conversations = await ConversationOperations.getAll();
+    const approvals = await ApprovalOperations.getAll();
+    
+    const businessData = {
+      totalOrders: 0, // Will be calculated from orders
+      revenue: 0, // Will be calculated from orders
+      activeCustomers: conversations.length,
+      botPerformance: bots.reduce((acc, bot) => {
+        acc[bot.botId] = {
+          status: bot.status,
+          connectedCustomers: bot.connectedCustomers || 0,
+          totalMessages: bot.totalMessages || 0
+        };
+        return acc;
+      }, {}),
+      recentIssues: approvals.filter(a => a.status === 'pending').slice(0, 5)
+    };
+    
+    const insights = await geminiService.generateBusinessInsights(businessData);
+    res.json(insights);
+  } catch (error) {
+    console.error('Error generating insights:', error);
+    res.status(500).json({ error: 'Failed to generate insights' });
+  }
+});
+
+// Get security logs from database
+app.get('/api/security/logs', async (req, res) => {
+  try {
+    const logs = await AuditOperations.getRecent(100);
+    res.json(logs);
+  } catch (error) {
+    console.error('Error fetching security logs:', error);
+    res.status(500).json({ error: 'Failed to fetch security logs' });
+  }
+});
+
+// AI chat endpoint for testing
+app.post('/api/ai/chat', async (req, res) => {
+  try {
+    const { message, customerContext, conversationHistory } = req.body;
+    
+    const aiResponse = await geminiService.processCustomerMessage(
+      message,
+      customerContext || {},
+      conversationHistory || []
+    );
+    
+    res.json(aiResponse);
+  } catch (error) {
+    console.error('Error processing AI chat:', error);
+    res.status(500).json({ error: 'Failed to process message' });
+  }
 });
 
 // ==================== ERROR HANDLING ====================
@@ -1129,31 +1711,39 @@ if (process.env.NODE_ENV === 'test') {
 
 // ==================== START SERVER ====================
 
-if (process.env.NODE_ENV !== 'test') {
-  app.listen(PORT, () => {
-    console.log(`
+async function startServer() {
+  try {
+    // Connect to database first
+    await connectDatabase();
+    console.log('✅ Database connected successfully');
+    
+    // Start HTTP server with WebSocket support
+    server.listen(PORT, () => {
+      console.log(`
 ╔══════════════════════════════════════════════════════════╗
 ║          Bharat Biz-Agent - Bot Server                   ║
 ║                                                          ║
 ║  🔐 Encryption:    AES-256-GCM Enabled                   ║
 ║  📱 WhatsApp:      ${process.env.WHATSAPP_API_KEY ? '✅ Configured  ' : '⚠️  Not Configured'}
-║  ✈️  Telegram:     ${process.env.TELEGRAM_BOT_TOKEN ? '✅ Configured  ' : '⚠️  Not Configured'}
+║  ✈️  Telegram:     ${(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_BOT_TOKEN !== 'your_telegram_bot_token_here') ? '✅ Configured  ' : '⚠️  Not Configured'}
 ║  🔑 Admin API:     ${process.env.ADMIN_API_KEY ? '✅ Configured  ' : '⚠️  Not Configured'}
+║  🤖 AI Service:    ${(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'your_gemini_api_key_here') ? '✅ Configured  ' : '⚠️  Not Configured'}
+║  💾 Database:      ✅ Connected                           ║
 ║                                                          ║
 ║  🌐 Server:        http://localhost:${PORT}              ║
 ║  💚 Health:        http://localhost:${PORT}/health       ║
 ╚══════════════════════════════════════════════════════════╝
-    `);
-
-    logSecurityEvent(
-      'Server Started',
-      'system',
-      'internal',
-      'info',
-      `Server listening on port ${PORT}`
-    );
-  });
+    
+[INFO] Server Started: Server listening on port ${PORT}`);
+    });
+  } catch (error) {
+    console.error('❌ Failed to start server:', error);
+    process.exit(1);
+  }
 }
 
 module.exports = app;
+
+// Start the server
+startServer().catch(console.error);
 
