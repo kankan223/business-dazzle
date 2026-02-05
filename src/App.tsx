@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import { getTimeAgo } from '@/hooks/use-time-ago';
 import { SidebarItem } from '@/components/sidebar-item';
 import { apiService, type Bot, type Conversation, type Approval, type Stats } from '@/services/api';
@@ -9,7 +9,8 @@ import {
   Database, Activity, CheckCheck,
   Menu, Plus,
   Eye, Download, Play, Pause, Key, Fingerprint,
-  AlertTriangle, Check
+  AlertTriangle, Check, Edit, Trash2,
+  Moon, Sun
 } from 'lucide-react';
 import { VoiceInput } from './components/VoiceInput';
 import { DirectCommand } from './components/DirectCommand';
@@ -28,43 +29,103 @@ import { toast } from 'sonner';
 import { Toaster } from '@/components/ui/sonner';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import './App.css';
-import { useEffect } from 'react';
 import { useRef } from 'react';
-
-// ==================== MOCK DATA ====================
-
-const chartData = [
-  { name: 'Mon', messages: 120, orders: 15, approvals: 3 },
-  { name: 'Tue', messages: 145, orders: 22, approvals: 5 },
-  { name: 'Wed', messages: 180, orders: 28, approvals: 4 },
-  { name: 'Thu', messages: 165, orders: 20, approvals: 6 },
-  { name: 'Fri', messages: 220, orders: 35, approvals: 8 },
-  { name: 'Sat', messages: 280, orders: 42, approvals: 10 },
-  { name: 'Sun', messages: 240, orders: 38, approvals: 7 },
-];
-
-const platformData = [
-  { name: 'WhatsApp', value: 245, color: '#25D366' },
-  { name: 'Telegram', value: 89, color: '#0088cc' },
-];
 
 // ==================== MAIN COMPONENT ====================
 
 function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [darkMode, setDarkMode] = useState(() => {
+    // Check localStorage or system preference
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme) {
+      return savedTheme === 'dark';
+    }
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  });
   const [bots, setBots] = useState<Bot[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [orders, setOrders] = useState<any[]>([]);
-  const [inventory] = useState([
-    { id: 'inv-1', name: 'Rice', sku: 'RICE-001', quantity: 120, unit: 'kg', price: 35, lowStockThreshold: 100, inquiries: 32 },
-    { id: 'inv-2', name: 'Wheat', sku: 'WHEAT-001', quantity: 150, unit: 'kg', price: 28, lowStockThreshold: 120, inquiries: 25 },
-    { id: 'inv-3', name: 'Sugar', sku: 'SUGAR-001', quantity: 80, unit: 'kg', price: 42, lowStockThreshold: 60, inquiries: 28 },
-    { id: 'inv-4', name: 'Cooking Oil', sku: 'OIL-001', quantity: 12, unit: 'litre', price: 180, lowStockThreshold: 20, inquiries: 15 },
-    { id: 'inv-5', name: 'Turmeric Powder', sku: 'TURM-001', quantity: 25, unit: 'kg', price: 120, lowStockThreshold: 15, inquiries: 8 },
-    { id: 'inv-6', name: 'Red Chilli Powder', sku: 'CHILLI-001', quantity: 30, unit: 'kg', price: 85, lowStockThreshold: 20, inquiries: 12 }
-  ]);
+  const [inventory, setInventory] = useState<any[]>([]);
+  const [activityData, setActivityData] = useState<any>(null);
+  const [lowStockWarnings, setLowStockWarnings] = useState<any[]>([]);
+
+  // Toggle dark mode
+  const toggleDarkMode = useCallback(() => {
+    setDarkMode(prev => {
+      const newMode = !prev;
+      localStorage.setItem('theme', newMode ? 'dark' : 'light');
+      if (newMode) {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+      return newMode;
+    });
+  }, []);
+
+  // Apply dark mode on mount
+  useEffect(() => {
+    if (darkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [darkMode]);
+
+  // Generate chart data from activity data
+  const chartData = useMemo(() => {
+    if (!activityData) {
+      return [
+        { name: 'Mon', messages: 0, orders: 0, approvals: 0 },
+        { name: 'Tue', messages: 0, orders: 0, approvals: 0 },
+        { name: 'Wed', messages: 0, orders: 0, approvals: 0 },
+        { name: 'Thu', messages: 0, orders: 0, approvals: 0 },
+        { name: 'Fri', messages: 0, orders: 0, approvals: 0 },
+        { name: 'Sat', messages: 0, orders: 0, approvals: 0 },
+        { name: 'Sun', messages: 0, orders: 0, approvals: 0 }
+      ];
+    }
+
+    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const today = new Date();
+    
+    return days.map((day, index) => {
+      const date = new Date(today);
+      date.setDate(today.getDate() - (6 - index));
+      
+      // For demo purposes, use activity summary distributed across days
+      const dayFactor = index === 6 ? 0.3 : (index === 5 ? 0.5 : 1); // Weekend lower activity
+      
+      return {
+        name: day,
+        messages: Math.floor((activityData.summary.totalConversations / 5) * dayFactor) || 0,
+        orders: Math.floor((activityData.summary.totalOrders / 5) * dayFactor) || 0,
+        approvals: Math.floor((activityData.summary.pendingApprovals / 5) * dayFactor) || 0
+      };
+    });
+  }, [activityData]);
+
+  // Generate platform distribution data
+  const platformData = useMemo(() => {
+    if (!activityData) {
+      return [
+        { name: 'Telegram', value: 65, color: '#0088cc' },
+        { name: 'WhatsApp', value: 35, color: '#25D366' }
+      ];
+    }
+
+    const telegramCount = activityData.summary.totalConversations * 0.65;
+    const whatsappCount = activityData.summary.totalConversations * 0.35;
+
+    return [
+      { name: 'Telegram', value: Math.round(telegramCount), color: '#0088cc' },
+      { name: 'WhatsApp', value: Math.round(whatsappCount), color: '#25D366' }
+    ];
+  }, [activityData]);
+
   const [orderForm, setOrderForm] = useState({
     customerName: '',
     customerPhone: '',
@@ -88,6 +149,16 @@ function App() {
   const [showAddBotDialog, setShowAddBotDialog] = useState(false);
   const [showOrderDialog, setShowOrderDialog] = useState(false);
   const [showProductDialog, setShowProductDialog] = useState(false);
+  const [showEditDialog, setShowEditDialog] = useState(false);
+  const [editingItem, setEditingItem] = useState<any>(null);
+  const [productForm, setProductForm] = useState({
+    name: '',
+    sku: '',
+    quantity: '',
+    unit: 'kg',
+    price: '',
+    lowStockThreshold: ''
+  });
   const [autoApproveEnabled, setAutoApproveEnabled] = useState(false);
   const [autoApproveThreshold, setAutoApproveThreshold] = useState(5000);
   const [processingApprovalId, setProcessingApprovalId] = useState<string | null>(null);
@@ -108,12 +179,14 @@ function App() {
         await apiService.initializeWebSocket();
         
         // Fetch initial data
-        const [botsData, approvalsData, conversationsData, statsData, securityLogsData] = await Promise.all([
+        const [botsData, approvalsData, conversationsData, statsData, securityLogsData, inventoryData, activityData] = await Promise.all([
           apiService.getBots(),
           apiService.getApprovals(),
           apiService.getConversations(),
           apiService.getStats(),
-          apiService.getSecurityLogs()
+          apiService.getSecurityLogs(),
+          apiService.getInventory(),
+          apiService.getActivity('24h')
         ]);
         
         setBots(botsData);
@@ -121,6 +194,8 @@ function App() {
         setConversations(conversationsData);
         setStats(statsData);
         setSecurityLogs(securityLogsData);
+        setInventory(inventoryData);
+        setActivityData(activityData);
         
       } catch (error) {
         console.error('Failed to initialize app:', error);
@@ -173,6 +248,38 @@ function App() {
       setOrders(prev => prev.map(order => 
         order.id === data.id ? { ...order, ...data } : order
       ));
+    });
+
+    // Inventory event listeners
+    apiService.onInventoryUpdate((data) => {
+      console.log('Inventory update:', data);
+      if (data.action === 'added') {
+        setInventory(prev => [...prev, data.item]);
+      } else if (data.action === 'updated') {
+        setInventory(prev => prev.map(item => 
+          item.id === data.item.id ? data.item : item
+        ));
+      } else if (data.action === 'deleted') {
+        setInventory(prev => prev.filter(item => item.id !== data.id));
+      }
+      toast.success(`Inventory ${data.action}: ${data.item?.name || data.id}`);
+    });
+
+    apiService.onLowStockWarning((data) => {
+      console.log('Low stock warning:', data);
+      setLowStockWarnings(prev => [...prev, data.item]);
+      toast.warning(`Low stock warning: ${data.item.name} (${data.item.quantity} ${data.item.unit} remaining)`);
+    });
+
+    apiService.onNewOrder((data) => {
+      console.log('New order:', data);
+      setOrders(prev => [data, ...prev]);
+      toast.success(`New order received: ${data.orderId}`);
+    });
+
+    apiService.onNewApproval((data) => {
+      setApprovals(prev => [data, ...prev]);
+      toast.info('New approval request received');
     });
 
     // Handle WebSocket errors
@@ -305,6 +412,99 @@ function App() {
       }, 3000);
     }
   }, [isRecording]);
+
+  // Inventory management functions
+  const handleAddProduct = useCallback(async () => {
+    try {
+      if (!productForm.name || !productForm.sku || !productForm.quantity || !productForm.price) {
+        toast.error('Please fill all required fields');
+        return;
+      }
+
+      const newItem = await apiService.addInventoryItem({
+        name: productForm.name,
+        sku: productForm.sku,
+        quantity: parseInt(productForm.quantity),
+        unit: productForm.unit,
+        price: parseFloat(productForm.price),
+        lowStockThreshold: productForm.lowStockThreshold ? parseInt(productForm.lowStockThreshold) : Math.floor(parseInt(productForm.quantity) * 0.2)
+      });
+
+      setInventory(prev => [...prev, newItem]);
+      setShowProductDialog(false);
+      setProductForm({
+        name: '',
+        sku: '',
+        quantity: '',
+        unit: 'kg',
+        price: '',
+        lowStockThreshold: ''
+      });
+      toast.success('Product added successfully');
+    } catch (error) {
+      console.error('Error adding product:', error);
+      toast.error('Failed to add product');
+    }
+  }, [productForm]);
+
+  const handleEditProduct = useCallback(async () => {
+    try {
+      if (!editingItem || !productForm.name || !productForm.quantity || !productForm.price) {
+        toast.error('Please fill all required fields');
+        return;
+      }
+
+      const updatedItem = await apiService.updateInventoryItem(editingItem.id, {
+        name: productForm.name,
+        quantity: parseInt(productForm.quantity),
+        unit: productForm.unit,
+        price: parseFloat(productForm.price),
+        lowStockThreshold: productForm.lowStockThreshold ? parseInt(productForm.lowStockThreshold) : Math.floor(parseInt(productForm.quantity) * 0.2)
+      });
+
+      setInventory(prev => prev.map(item => 
+        item.id === editingItem.id ? updatedItem : item
+      ));
+      setShowEditDialog(false);
+      setEditingItem(null);
+      setProductForm({
+        name: '',
+        sku: '',
+        quantity: '',
+        unit: 'kg',
+        price: '',
+        lowStockThreshold: ''
+      });
+      toast.success('Product updated successfully');
+    } catch (error) {
+      console.error('Error updating product:', error);
+      toast.error('Failed to update product');
+    }
+  }, [editingItem, productForm]);
+
+  const handleDeleteProduct = useCallback(async (itemId: string, itemName: string) => {
+    try {
+      await apiService.deleteInventoryItem(itemId);
+      setInventory(prev => prev.filter(item => item.id !== itemId));
+      toast.success(`Product "${itemName}" deleted successfully`);
+    } catch (error) {
+      console.error('Error deleting product:', error);
+      toast.error('Failed to delete product');
+    }
+  }, []);
+
+  const openEditDialog = useCallback((item: any) => {
+    setEditingItem(item);
+    setProductForm({
+      name: item.name,
+      sku: item.sku,
+      quantity: item.quantity.toString(),
+      unit: item.unit,
+      price: item.price.toString(),
+      lowStockThreshold: item.lowStockThreshold.toString()
+    });
+    setShowEditDialog(true);
+  }, []);
 
   // Rotate encryption key
   const rotateEncryptionKey = useCallback(() => {
@@ -491,6 +691,9 @@ function App() {
               <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
               <span className="text-xs font-medium text-green-700">All Systems Operational</span>
             </div>
+            <Button variant="ghost" size="icon" onClick={toggleDarkMode} className="relative">
+              {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+            </Button>
             <Button variant="ghost" size="icon" className="relative" onClick={() => navigate('approvals')}>
               <Bell className="w-5 h-5" />
               {stats?.pendingApprovals && stats.pendingApprovals > 0 && (
@@ -520,7 +723,7 @@ function App() {
                         <CardDescription className="text-blue-700 flex items-center gap-2">
                           <BotIcon className="w-4 h-4" /> Active Bots
                         </CardDescription>
-                        <CardTitle className="text-3xl text-blue-800">{stats?.activeBots || 0}/{stats?.totalBots || 0}</CardTitle>
+                        <CardTitle className="text-3xl text-blue-800">{bots?.filter(b => b.status === 'active').length || 0}/{bots?.length || 0}</CardTitle>
                       </CardHeader>
                       <CardContent>
                         <p className="text-xs text-blue-600">{stats?.totalCustomers || 0} customers connected</p>
@@ -531,7 +734,7 @@ function App() {
                         <CardDescription className="text-orange-700 flex items-center gap-2">
                           <CheckCheck className="w-4 h-4" /> Pending Approvals
                         </CardDescription>
-                        <CardTitle className="text-3xl text-orange-800">{stats?.pendingApprovals || 0}</CardTitle>
+                        <CardTitle className="text-3xl text-orange-800">{activityData?.summary?.pendingApprovals || approvals.filter(a => a.status === 'pending').length}</CardTitle>
                       </CardHeader>
                       <CardContent>
                         <p className="text-xs text-orange-600">Require admin action</p>
@@ -540,23 +743,23 @@ function App() {
                     <Card className="bg-gradient-to-br from-green-50 to-green-100 border-green-200 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate('orders')}>
                       <CardHeader className="pb-2">
                         <CardDescription className="text-green-700 flex items-center gap-2">
-                          <FileText className="w-4 h-4" /> Bot-Handled Orders
+                          <FileText className="w-4 h-4" /> Total Orders
                         </CardDescription>
-                        <CardTitle className="text-3xl text-green-800">{stats?.botHandledOrders || 0}</CardTitle>
+                        <CardTitle className="text-3xl text-green-800">{activityData?.summary?.totalOrders || orders.length}</CardTitle>
                       </CardHeader>
                       <CardContent>
-                        <p className="text-xs text-green-600">{formatCurrency(stats?.totalRevenue || 0)} revenue</p>
+                        <p className="text-xs text-green-600">{formatCurrency(activityData?.summary?.totalRevenue || 0)} revenue</p>
                       </CardContent>
                     </Card>
                     <Card className="bg-gradient-to-br from-purple-50 to-purple-100 border-purple-200 hover:shadow-lg transition-shadow">
                       <CardHeader className="pb-2">
                         <CardDescription className="text-purple-700 flex items-center gap-2">
-                          <MessageSquare className="w-4 h-4" /> Total Messages
+                          <MessageSquare className="w-4 h-4" /> Total Conversations
                         </CardDescription>
-                        <CardTitle className="text-3xl text-purple-800">{(stats?.totalMessages || 0).toLocaleString()}</CardTitle>
+                        <CardTitle className="text-3xl text-purple-800">{(activityData?.summary?.totalConversations || conversations.length).toLocaleString()}</CardTitle>
                       </CardHeader>
                       <CardContent>
-                        <p className="text-xs text-purple-600">+12% from last week</p>
+                        <p className="text-xs text-purple-600">Last 24 hours</p>
                       </CardContent>
                     </Card>
                   </div>
@@ -1159,6 +1362,7 @@ function App() {
                             <TableHead>Price</TableHead>
                             <TableHead>Inquiries</TableHead>
                             <TableHead>Status</TableHead>
+                            <TableHead>Actions</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -1168,7 +1372,7 @@ function App() {
                               <TableCell className="text-muted-foreground">{item.sku}</TableCell>
                               <TableCell>{item.quantity} {item.unit}</TableCell>
                               <TableCell>{formatCurrency(item.price)}</TableCell>
-                              <TableCell>{item.inquiries}</TableCell>
+                              <TableCell>{item.inquiries || 0}</TableCell>
                               <TableCell>
                                 {item.quantity < item.lowStockThreshold ? (
                                   <Badge variant="destructive" className="flex items-center gap-1 w-fit">
@@ -1178,6 +1382,20 @@ function App() {
                                 ) : (
                                   <Badge variant="default" className="bg-green-500">OK</Badge>
                                 )}
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex items-center gap-2">
+                                  <Button variant="ghost" size="sm" onClick={() => openEditDialog(item)}>
+                                    <Edit className="w-4 h-4" />
+                                  </Button>
+                                  <Button variant="ghost" size="sm" onClick={() => {
+                                    if (confirm(`Are you sure you want to delete "${item.name}"?`)) {
+                                      handleDeleteProduct(item.id, item.name);
+                                    }
+                                  }}>
+                                    <Trash2 className="w-4 h-4" />
+                                  </Button>
+                                </div>
                               </TableCell>
                             </TableRow>
                           ))}
@@ -1801,20 +2019,36 @@ function App() {
           <div className="space-y-4">
             <div>
               <label className="text-sm font-medium">Product Name</label>
-              <Input placeholder="e.g., Organic Rice" className="mt-1" />
+              <Input 
+                placeholder="e.g., Organic Rice" 
+                className="mt-1"
+                value={productForm.name}
+                onChange={(e) => setProductForm(prev => ({ ...prev, name: e.target.value }))}
+              />
             </div>
             <div>
               <label className="text-sm font-medium">SKU</label>
-              <Input placeholder="e.g., RICE-ORG-001" className="mt-1" />
+              <Input 
+                placeholder="e.g., RICE-ORG-001" 
+                className="mt-1"
+                value={productForm.sku}
+                onChange={(e) => setProductForm(prev => ({ ...prev, sku: e.target.value }))}
+              />
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="text-sm font-medium">Price (₹)</label>
-                <Input type="number" placeholder="0" className="mt-1" />
+                <Input 
+                  type="number" 
+                  placeholder="0" 
+                  className="mt-1"
+                  value={productForm.price}
+                  onChange={(e) => setProductForm(prev => ({ ...prev, price: e.target.value }))}
+                />
               </div>
               <div>
                 <label className="text-sm font-medium">Unit</label>
-                <Select defaultValue="kg">
+                <Select value={productForm.unit} onValueChange={(value) => setProductForm(prev => ({ ...prev, unit: value }))}>
                   <SelectTrigger className="mt-1">
                     <SelectValue />
                   </SelectTrigger>
@@ -1830,22 +2064,116 @@ function App() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="text-sm font-medium">Initial Stock</label>
-                <Input type="number" placeholder="0" className="mt-1" />
+                <Input 
+                  type="number" 
+                  placeholder="0" 
+                  className="mt-1"
+                  value={productForm.quantity}
+                  onChange={(e) => setProductForm(prev => ({ ...prev, quantity: e.target.value }))}
+                />
               </div>
               <div>
                 <label className="text-sm font-medium">Low Stock Alert</label>
-                <Input type="number" placeholder="10" className="mt-1" />
+                <Input 
+                  type="number" 
+                  placeholder="10" 
+                  className="mt-1"
+                  value={productForm.lowStockThreshold}
+                  onChange={(e) => setProductForm(prev => ({ ...prev, lowStockThreshold: e.target.value }))}
+                />
               </div>
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowProductDialog(false)}>Cancel</Button>
-            <Button onClick={() => { 
-              toast.success('Product added to inventory'); 
-              setShowProductDialog(false);
-            }}>
+            <Button onClick={handleAddProduct}>
               <Plus className="w-4 h-4 mr-1" />
               Add Product
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Product Dialog */}
+      <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Edit Product</DialogTitle>
+            <DialogDescription>Update product information</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium">Product Name</label>
+              <Input 
+                placeholder="e.g., Organic Rice" 
+                className="mt-1"
+                value={productForm.name}
+                onChange={(e) => setProductForm(prev => ({ ...prev, name: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">SKU</label>
+              <Input 
+                placeholder="e.g., RICE-ORG-001" 
+                className="mt-1"
+                value={productForm.sku}
+                onChange={(e) => setProductForm(prev => ({ ...prev, sku: e.target.value }))}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-sm font-medium">Price (₹)</label>
+                <Input 
+                  type="number" 
+                  placeholder="0" 
+                  className="mt-1"
+                  value={productForm.price}
+                  onChange={(e) => setProductForm(prev => ({ ...prev, price: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium">Unit</label>
+                <Select value={productForm.unit} onValueChange={(value) => setProductForm(prev => ({ ...prev, unit: value }))}>
+                  <SelectTrigger className="mt-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="kg">kg</SelectItem>
+                    <SelectItem value="litre">litre</SelectItem>
+                    <SelectItem value="packet">packet</SelectItem>
+                    <SelectItem value="piece">piece</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-sm font-medium">Current Stock</label>
+                <Input 
+                  type="number" 
+                  placeholder="0" 
+                  className="mt-1"
+                  value={productForm.quantity}
+                  onChange={(e) => setProductForm(prev => ({ ...prev, quantity: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium">Low Stock Alert</label>
+                <Input 
+                  type="number" 
+                  placeholder="10" 
+                  className="mt-1"
+                  value={productForm.lowStockThreshold}
+                  onChange={(e) => setProductForm(prev => ({ ...prev, lowStockThreshold: e.target.value }))}
+                />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowEditDialog(false)}>Cancel</Button>
+            <Button onClick={handleEditProduct}>
+              <Edit className="w-4 h-4 mr-1" />
+              Update Product
             </Button>
           </DialogFooter>
         </DialogContent>

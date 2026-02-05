@@ -4,6 +4,7 @@
  */
 
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { InventoryOperations } = require('./database');
 
 class GeminiAIService {
   constructor() {
@@ -179,99 +180,207 @@ Please provide:
     };
   }
 
-  // Fallback response when AI is not available
-  getFallbackResponse(message) {
+  // Enhanced fallback responses with better context
+  async getFallbackResponse(message) {
     const lowerMessage = message.toLowerCase();
     
-    // Check for price queries
+    // Dynamic product responses - sync with inventory
     if (lowerMessage.includes('price') || lowerMessage.includes('cost') || lowerMessage.includes('rate')) {
-      // Check for specific products first (more specific matches first)
-      if (lowerMessage.includes('sugar')) {
+      try {
+        // Get real inventory data
+        const inventory = await InventoryOperations.getAll();
+        const productKeywords = ['rice', 'wheat', 'sugar', 'oil', 'turmeric', 'chilli'];
+        const mentionedProduct = productKeywords.find(product => lowerMessage.includes(product));
+        
+        if (mentionedProduct) {
+          const product = inventory.find(item => 
+            item.name.toLowerCase().includes(mentionedProduct) || 
+            item.sku.toLowerCase().includes(mentionedProduct)
+          );
+          
+          if (product) {
+            return {
+              response: `💰 ${product.name} Pricing:\n\n💵 Price: ₹${product.price} per ${product.unit}\n📦 Stock: ${product.quantity} ${product.unit} available\n⚠️ Low stock alert at: ${product.lowStockThreshold} ${product.unit}\n\nWould you like to place an order?`,
+              approvalNeeded: false,
+              confidence: 0.9,
+              suggestedActions: ['process_order'],
+              language: this.detectLanguage(message)
+            };
+          }
+        }
+        
+        // Show all products if no specific product mentioned
+        const productList = inventory.map(item => 
+          `• ${item.name}: ₹${item.price}/${item.unit} (${item.quantity} ${item.unit} in stock)`
+        ).join('\n');
+        
         return {
-          response: '🍬 Sugar is available at ₹42 per kg. Available in 1kg and 5kg packs. Would you like to place an order?',
+          response: `🛍️ Current Products & Prices:\n\n${productList}\n\nWhich product would you like to know more about?`,
           approvalNeeded: false,
           confidence: 0.9,
           suggestedActions: ['process_order'],
           language: this.detectLanguage(message)
         };
-      } else if (lowerMessage.includes('wheat')) {
-        return {
-          response: '🌾 Wheat is available at ₹28 per kg. Available in 5kg and 10kg packs. Would you like to place an order?',
-          approvalNeeded: false,
-          confidence: 0.9,
-          suggestedActions: ['process_order'],
-          language: this.detectLanguage(message)
-        };
-      } else if (lowerMessage.includes('oil') || lowerMessage.includes('cooking oil')) {
-        return {
-          response: '🫒 Cooking Oil is available at ₹180 per litre. Available in 1L and 5L cans. Would you like to place an order?',
-          approvalNeeded: false,
-          confidence: 0.9,
-          suggestedActions: ['process_order'],
-          language: this.detectLanguage(message)
-        };
-      } else if (lowerMessage.includes('turmeric')) {
-        return {
-          response: '🟡 Turmeric Powder is available at ₹120 per kg. Available in 100g and 500g packs. Would you like to place an order?',
-          approvalNeeded: false,
-          confidence: 0.9,
-          suggestedActions: ['process_order'],
-          language: this.detectLanguage(message)
-        };
-      } else if (lowerMessage.includes('chilli') || lowerMessage.includes('chili')) {
-        return {
-          response: '🌶️ Red Chilli Powder is available at ₹85 per kg. Available in 100g and 500g packs. Would you like to place an order?',
-          approvalNeeded: false,
-          confidence: 0.9,
-          suggestedActions: ['process_order'],
-          language: this.detectLanguage(message)
-        };
-      } else if (lowerMessage.includes('rice')) {
-        return {
-          response: '� Rice is available at ₹35 per kg. Available in 5kg, 10kg, and 25kg packs. Would you like to place an order?',
-          approvalNeeded: false,
-          confidence: 0.9,
-          suggestedActions: ['process_order'],
-          language: this.detectLanguage(message)
-        };
+      } catch (error) {
+        console.error('Error fetching inventory for price query:', error);
       }
     }
     
-    // Check for stock queries
+    // Dynamic stock check responses
     if (lowerMessage.includes('stock') || lowerMessage.includes('available') || lowerMessage.includes('quantity')) {
-      if (lowerMessage.includes('rice')) {
+      try {
+        const inventory = await InventoryOperations.getAll();
+        const productKeywords = ['rice', 'wheat', 'sugar', 'oil', 'turmeric', 'chilli'];
+        const mentionedProduct = productKeywords.find(product => lowerMessage.includes(product));
+        
+        if (mentionedProduct) {
+          const product = inventory.find(item => 
+            item.name.toLowerCase().includes(mentionedProduct) || 
+            item.sku.toLowerCase().includes(mentionedProduct)
+          );
+          
+          if (product) {
+            const stockStatus = product.quantity <= product.lowStockThreshold ? '⚠️ LOW STOCK' : '✅ In Stock';
+            return {
+              response: `� ${product.name} Stock Status:\n\n📦 Available: ${product.quantity} ${product.unit}\n${stockStatus}\n� Last updated: ${new Date(product.updatedAt).toLocaleString()}\n\n${product.quantity <= product.lowStockThreshold ? '⚠️ Order soon - stock running low!' : '✅ Good availability'}`,
+              approvalNeeded: false,
+              confidence: 0.9,
+              suggestedActions: product.quantity <= product.lowStockThreshold ? ['process_order'] : [],
+              language: this.detectLanguage(message)
+            };
+          }
+        }
+        
+        // Show low stock items
+        const lowStockItems = inventory.filter(item => item.quantity <= item.lowStockThreshold);
+        if (lowStockItems.length > 0) {
+          const lowStockList = lowStockItems.map(item => 
+            `⚠️ ${item.name}: ${item.quantity} ${item.unit} (threshold: ${item.lowStockThreshold} ${item.unit})`
+          ).join('\n');
+          
+          return {
+            response: `🚨 Low Stock Alert:\n\n${lowStockList}\n\nThese items need restocking soon!`,
+            approvalNeeded: false,
+            confidence: 0.9,
+            suggestedActions: ['restock_alert'],
+            language: this.detectLanguage(message)
+          };
+        }
+        
         return {
-          response: '🌾 Rice is currently in stock with 120kg available. Stock level is healthy. Would you like to place an order?',
+          response: '📦 All products are well stocked! Is there a specific item you\'d like to check?',
           approvalNeeded: false,
+          confidence: 0.8,
+          suggestedActions: [],
+          language: this.detectLanguage(message)
+        };
+      } catch (error) {
+        console.error('Error fetching inventory for stock query:', error);
+      }
+    }
+    
+    // Check for order queries with better guidance
+    if (lowerMessage.includes('order') || lowerMessage.includes('buy') || lowerMessage.includes('purchase') || lowerMessage.includes('want')) {
+      // Try to extract product and quantity
+      const productMatch = message.match(/(rice|wheat|sugar|oil|turmeric|chilli)/i);
+      const quantityMatch = message.match(/(\d+)\s*(kg|l|litre|grams?|packs?)/i);
+      
+      if (productMatch && quantityMatch) {
+        const product = productMatch[1].toLowerCase();
+        const quantity = quantityMatch[1];
+        const unit = quantityMatch[2];
+        
+        return {
+          response: `📦 Order detected!\n\nProduct: ${product}\nQuantity: ${quantity} ${unit}\n\nProcessing your order... Please confirm to proceed.`,
+          approvalNeeded: true,
           confidence: 0.9,
+          suggestedActions: ['process_order'],
+          language: this.detectLanguage(message)
+        };
+      } else {
+        return {
+          response: '📋 To place an order, please specify:\n\n1️⃣ Product name (rice, wheat, sugar, oil, turmeric, chilli)\n2️⃣ Quantity needed (e.g., 5kg, 2L, 500g)\n3️⃣ Delivery address (if needed)\n\nExample: "I want to order 10kg rice"\n\nOr simply tell me what you need and I\'ll help!',
+          approvalNeeded: false,
+          confidence: 0.8,
           suggestedActions: ['process_order'],
           language: this.detectLanguage(message)
         };
       }
     }
+
+    // Check for direct product + quantity patterns (e.g., "Rice 5kg")
+    const productMatch = message.match(/(rice|wheat|sugar|oil|turmeric|chilli)/i);
+    const quantityMatch = message.match(/(\d+)\s*(kg|l|litre|grams?|packs?)/i);
     
-    // Check for order queries
-    if (lowerMessage.includes('order')) {
+    if (productMatch && quantityMatch && !lowerMessage.includes('price') && !lowerMessage.includes('cost')) {
+      const product = productMatch[1].toLowerCase();
+      const quantity = quantityMatch[1];
+      const unit = quantityMatch[2];
+      
       return {
-        response: '📦 To place an order, please specify:\n1. Product name\n2. Quantity needed\n\nExample: "I want to order 10kg rice"\n\nAvailable products: Rice, Wheat, Sugar, Cooking Oil, Turmeric Powder, Red Chilli Powder',
-        approvalNeeded: false,
-        confidence: 0.8,
+        response: `📦 Order detected!\n\nProduct: ${product}\nQuantity: ${quantity} ${unit}\n\nProcessing your order... Please confirm to proceed.`,
+        approvalNeeded: true,
+        confidence: 0.9,
         suggestedActions: ['process_order'],
         language: this.detectLanguage(message)
       };
     }
     
-    // Default helpful responses
-    const responses = [
-      'Thank you for your message. I can help you with:\n• Product prices\n• Stock availability\n• Placing orders\n• Order status\n\nWhat would you like to know?',
-      'Hello! I\'m here to help with your business needs. You can ask about:\n• Product prices and availability\n• Order placement\n• Delivery information\n• Payment options\n\nHow can I assist you today?',
-      'Welcome to Bharat Biz-Agent! I can assist with:\n🌾 Product inquiries\n📦 Order placement\n🚚 Delivery information\n💳 Payment options\n\nWhat would you like to know?'
+    // Check for delivery queries
+    if (lowerMessage.includes('delivery') || lowerMessage.includes('shipping') || lowerMessage.includes('when will i get')) {
+      return {
+        response: '🚚 Delivery Information:\n\n📍 Within city: Same day (before 8 PM)\n📍 City outskirts: Next day\n📦 Delivery charge: ₹20-₹50 based on distance\n⏰ Order cutoff: 6 PM for same-day delivery\n\nTrack your order with the order number I provide!',
+          approvalNeeded: false,
+          confidence: 0.9,
+          suggestedActions: [],
+          language: this.detectLanguage(message)
+        };
+    }
+    
+    // Check for payment queries
+    if (lowerMessage.includes('payment') || lowerMessage.includes('pay') || lowerMessage.includes('cash')) {
+      return {
+        response: '💳 Payment Options:\n\n📱 UPI: bharatbiz@upi\n🏦 Bank Transfer: Bharat Business, HDFC0001234\n💵 Cash on Delivery (COD)\n📱 PhonePe/GPay: bharatbiz@upi\n\nAll transactions are secured with encryption!',
+          approvalNeeded: false,
+          confidence: 0.9,
+          suggestedActions: [],
+          language: this.detectLanguage(message)
+        };
+    }
+    
+    // Check for help queries
+    if (lowerMessage.includes('help') || lowerMessage.includes('menu') || lowerMessage.includes('what can you do')) {
+      return {
+        response: '🤖 Bharat Biz-Agent Capabilities:\n\n📦 Product Information\n• Prices, stock, availability\n• Quality details\n\n🛒 Order Management\n• Place orders\n• Track orders\n• Modify/cancel orders\n\n🚚 Delivery Services\n• Same-day delivery in city\n• Next-day to outskirts\n• Real-time tracking\n\n💳 Payment Processing\n• Multiple payment options\n• Secure transactions\n• GST invoices\n\n🌐 Multi-language Support\n• English, Hindi, Hinglish\n• Regional languages\n\nJust ask me anything in natural language!',
+          approvalNeeded: false,
+          confidence: 0.9,
+          suggestedActions: [],
+          language: this.detectLanguage(message)
+        };
+    }
+    
+    // Default intelligent responses based on message patterns
+    if (lowerMessage.includes('hello') || lowerMessage.includes('hi') || lowerMessage.includes('namaste')) {
+      return {
+        response: '🙏 Namaste! Welcome to Bharat Biz-Agent!\n\nI can help you with:\n📦 Product inquiries and orders\n🚚 Delivery tracking\n💳 Payment information\n📊 Business insights\n\nWhat can I help you with today?',
+        approvalNeeded: false,
+        confidence: 0.8,
+        suggestedActions: [],
+        language: this.detectLanguage(message)
+      };
+    }
+    
+    // Context-aware default response
+    const contextualResponses = [
+      'I understand you\'re interested in our products. Would you like to:\n1️⃣ Check prices\n2️⃣ See stock availability\n3️⃣ Place an order\n4️⃣ Know about delivery',
+      'I\'m here to help with your business needs. You can ask me about:\n🌾 Products & Pricing\n📦 Orders & Delivery\n💳 Payment Options\n📊 Business Information\n\nWhat would you like to know?',
+      'Thank you for contacting Bharat Biz-Agent! How can I assist you today?\n\nPopular requests:\n• Product prices and availability\n• Order placement and tracking\n• Delivery information\n• Payment options'
     ];
     
     return {
-      response: responses[Math.floor(Math.random() * responses.length)],
+      response: contextualResponses[Math.floor(Math.random() * contextualResponses.length)],
       approvalNeeded: false,
-      confidence: 0.5,
+      confidence: 0.7,
       suggestedActions: [],
       language: this.detectLanguage(message)
     };

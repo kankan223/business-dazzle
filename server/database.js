@@ -21,7 +21,8 @@ const COLLECTIONS = {
   CUSTOMERS: 'customers',
   AUDIT_LOGS: 'audit_logs',
   AI_RESPONSES: 'ai_responses',
-  SYSTEM_CONFIG: 'system_config'
+  SYSTEM_CONFIG: 'system_config',
+  INVENTORY: 'inventory'
 };
 
 // Connect to MongoDB
@@ -42,43 +43,195 @@ async function connectDatabase() {
     return db;
   } catch (error) {
     console.error('❌ Database connection error:', error);
-    throw error;
+    console.log('⚠️ Using in-memory fallback database (data will be lost on restart)');
+    
+    // Initialize in-memory fallback
+    db = createInMemoryFallback();
+    await initializeDefaultData();
+    
+    return db;
   }
+}
+
+// Create in-memory fallback database
+function createInMemoryFallback() {
+  const collections = {
+    bots: [],
+    conversations: [],
+    approvals: [],
+    orders: [],
+    customers: [],
+    audit_logs: [],
+    ai_responses: [],
+    system_config: [],
+    inventory: []
+  };
+  
+  return {
+    collection: (name) => ({
+      find: (query = {}) => ({
+        toArray: async () => {
+          let data = collections[name] || [];
+          if (query._id) {
+            data = data.filter(item => item._id === query._id);
+          }
+          if (query.customerId) {
+            data = data.filter(item => item.customerId === query.customerId);
+          }
+          if (query.lastMessageAt && query.lastMessageAt.$gte) {
+            const startDate = new Date(query.lastMessageAt.$gte);
+            const endDate = query.lastMessageAt.$lte ? new Date(query.lastMessageAt.$lte) : new Date();
+            data = data.filter(item => {
+              const itemDate = new Date(item.lastMessageAt || item.createdAt);
+              return itemDate >= startDate && itemDate <= endDate;
+            });
+          }
+          if (query.createdAt && query.createdAt.$gte) {
+            const startDate = new Date(query.createdAt.$gte);
+            const endDate = query.createdAt.$lte ? new Date(query.createdAt.$lte) : new Date();
+            data = data.filter(item => {
+              const itemDate = new Date(item.createdAt);
+              return itemDate >= startDate && itemDate <= endDate;
+            });
+          }
+          if (query.requestedAt && query.requestedAt.$gte) {
+            const startDate = new Date(query.requestedAt.$gte);
+            const endDate = query.requestedAt.$lte ? new Date(query.requestedAt.$lte) : new Date();
+            data = data.filter(item => {
+              const itemDate = new Date(item.requestedAt);
+              return itemDate >= startDate && itemDate <= endDate;
+            });
+          }
+          if (query.$expr && query.$expr.$lte) {
+            data = data.filter(item => item.quantity <= item.lowStockThreshold);
+          }
+          return data;
+        },
+        sort: () => ({ toArray: async () => collections[name] || [] }),
+        limit: () => ({ toArray: async () => (collections[name] || []).slice(0, 10) }),
+        skip: () => ({ toArray: async () => collections[name] || [] })
+      }),
+      findOne: async (query = {}) => {
+        let data = collections[name] || [];
+        if (query._id) {
+          data = data.filter(item => item._id === query._id);
+        }
+        if (query.id) {
+          data = data.filter(item => item.id === query.id);
+        }
+        if (query.key) {
+          data = data.filter(item => item.key === query.key);
+        }
+        return data.length > 0 ? data[0] : null;
+      },
+      insertOne: async (doc) => {
+        if (!collections[name]) collections[name] = [];
+        const newDoc = { ...doc, _id: doc._id || Date.now().toString() };
+        collections[name].push(newDoc);
+        return { insertedId: newDoc._id };
+      },
+      insertMany: async (docs) => {
+        if (!collections[name]) collections[name] = [];
+        const newDocs = docs.map(doc => ({ ...doc, _id: doc._id || Date.now().toString() + Math.random() }));
+        collections[name].push(...newDocs);
+        return { insertedIds: newDocs.map(doc => doc._id) };
+      },
+      updateOne: async (query, update) => {
+        if (!collections[name]) collections[name] = [];
+        const index = collections[name].findIndex(item => 
+          (query._id && item._id === query._id) ||
+          (query.id && item.id === query.id) ||
+          (query.customerId && item.customerId === query.customerId && query.botId && item.botId === query.botId)
+        );
+        if (index !== -1) {
+          if (update.$set) {
+            collections[name][index] = { ...collections[name][index], ...update.$set };
+          }
+          if (update.$push) {
+            Object.keys(update.$push).forEach(key => {
+              if (!collections[name][index][key]) collections[name][index][key] = [];
+              collections[name][index][key].push(...update.$push[key]);
+            });
+          }
+          return { matchedCount: 1, modifiedCount: 1 };
+        }
+        return { matchedCount: 0, modifiedCount: 0 };
+      },
+      deleteOne: async (query) => {
+        if (!collections[name]) collections[name] = [];
+        const index = collections[name].findIndex(item => 
+          (query._id && item._id === query._id) ||
+          (query.id && item.id === query.id)
+        );
+        if (index !== -1) {
+          collections[name].splice(index, 1);
+          return { deletedCount: 1 };
+        }
+        return { deletedCount: 0 };
+      },
+      aggregate: async (pipeline) => {
+        let data = collections[name] || [];
+        
+        // Simple aggregation for stats
+        if (pipeline.length > 0 && pipeline[0].$group) {
+          const groupStage = pipeline[0].$group;
+          const result = {};
+          
+          data.forEach(item => {
+            const key = item[groupStage._id] || 'unknown';
+            if (!result[key]) {
+              result[key] = { _id: key, count: 0, totalAmount: 0 };
+            }
+            result[key].count++;
+            if (item.totalAmount) {
+              result[key].totalAmount += item.totalAmount;
+            }
+          });
+          
+          return Object.values(result);
+        }
+        
+        return data;
+      }
+    })
+  };
 }
 
 // Create database indexes
 async function createIndexes() {
   try {
-    // Bots collection indexes
-    await db.collection(COLLECTIONS.BOTS).createIndex({ botId: 1 }, { unique: true });
-    await db.collection(COLLECTIONS.BOTS).createIndex({ status: 1 });
-    
-    // Conversations collection indexes
-    await db.collection(COLLECTIONS.CONVERSATIONS).createIndex({ customerId: 1 });
-    await db.collection(COLLECTIONS.CONVERSATIONS).createIndex({ botId: 1 });
-    await db.collection(COLLECTIONS.CONVERSATIONS).createIndex({ lastMessageAt: -1 });
-    
-    // Approvals collection indexes
-    await db.collection(COLLECTIONS.APPROVALS).createIndex({ status: 1 });
-    await db.collection(COLLECTIONS.APPROVALS).createIndex({ priority: 1 });
-    await db.collection(COLLECTIONS.APPROVALS).createIndex({ requestedAt: -1 });
-    
-    // Orders collection indexes
-    await db.collection(COLLECTIONS.ORDERS).createIndex({ orderId: 1 }, { unique: true });
-    await db.collection(COLLECTIONS.ORDERS).createIndex({ botId: 1 });
-    await db.collection(COLLECTIONS.ORDERS).createIndex({ status: 1 });
-    
-    // Customers collection indexes
-    await db.collection(COLLECTIONS.CUSTOMERS).createIndex({ phone: 1 }, { unique: true });
-    await db.collection(COLLECTIONS.CUSTOMERS).createIndex({ email: 1 });
-    
-    // Audit logs collection indexes
-    await db.collection(COLLECTIONS.AUDIT_LOGS).createIndex({ timestamp: -1 });
-    await db.collection(COLLECTIONS.AUDIT_LOGS).createIndex({ action: 1 });
-    
-    console.log('✅ Database indexes created successfully');
+    // Only create indexes if using real MongoDB
+    if (client) {
+      // Bots collection indexes
+      await db.collection(COLLECTIONS.BOTS).createIndex({ botId: 1 }, { unique: true });
+      await db.collection(COLLECTIONS.BOTS).createIndex({ status: 1 });
+      
+      // Conversations collection indexes
+      await db.collection(COLLECTIONS.CONVERSATIONS).createIndex({ customerId: 1, botId: 1 });
+      await db.collection(COLLECTIONS.CONVERSATIONS).createIndex({ lastMessageAt: -1 });
+      
+      // Approvals collection indexes
+      await db.collection(COLLECTIONS.APPROVALS).createIndex({ requestedAt: -1 });
+      await db.collection(COLLECTIONS.APPROVALS).createIndex({ status: 1 });
+      
+      // Orders collection indexes
+      await db.collection(COLLECTIONS.ORDERS).createIndex({ orderId: 1 }, { unique: true });
+      await db.collection(COLLECTIONS.ORDERS).createIndex({ customerId: 1 });
+      await db.collection(COLLECTIONS.ORDERS).createIndex({ createdAt: -1 });
+      
+      // Customers collection indexes
+      await db.collection(COLLECTIONS.CUSTOMERS).createIndex({ customerId: 1 }, { unique: true });
+      await db.collection(COLLECTIONS.CUSTOMERS).createIndex({ phone: 1 });
+      
+      // Inventory collection indexes
+      await db.collection(COLLECTIONS.INVENTORY).createIndex({ sku: 1 }, { unique: true });
+      await db.collection(COLLECTIONS.INVENTORY).createIndex({ name: 1 });
+      
+      console.log('✅ Database indexes created successfully');
+    }
   } catch (error) {
     console.error('❌ Error creating indexes:', error);
+    // Continue without indexes for fallback mode
   }
 }
 
@@ -239,6 +392,19 @@ const ConversationOperations = {
         }
       }
     );
+  },
+
+  // Get conversations by date range
+  async getByDateRange(startDate, endDate) {
+    return await db.collection(COLLECTIONS.CONVERSATIONS)
+      .find({
+        lastMessageAt: {
+          $gte: startDate,
+          $lte: endDate
+        }
+      })
+      .sort({ lastMessageAt: -1 })
+      .toArray();
   }
 };
 
@@ -284,6 +450,19 @@ const ApprovalOperations = {
         }
       }
     );
+  },
+
+  // Get approvals by date range
+  async getByDateRange(startDate, endDate = new Date()) {
+    return await db.collection(COLLECTIONS.APPROVALS)
+      .find({
+        requestedAt: {
+          $gte: startDate,
+          $lte: endDate
+        }
+      })
+      .sort({ requestedAt: -1 })
+      .toArray();
   }
 };
 
@@ -338,6 +517,254 @@ const AuditOperations = {
   }
 };
 
+const InventoryOperations = {
+  // Get all inventory items
+  async getAll() {
+    return await db.collection(COLLECTIONS.INVENTORY)
+      .find({})
+      .sort({ name: 1 })
+      .toArray();
+  },
+  
+  // Get inventory item by ID
+  async getById(id) {
+    return await db.collection(COLLECTIONS.INVENTORY).findOne({ id });
+  },
+  
+  // Get inventory item by SKU
+  async getBySku(sku) {
+    return await db.collection(COLLECTIONS.INVENTORY).findOne({ sku: sku.toUpperCase() });
+  },
+  
+  // Create new inventory item
+  async create(item) {
+    const newItem = {
+      ...item,
+      id: `inv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    
+    await db.collection(COLLECTIONS.INVENTORY).insertOne(newItem);
+    return newItem;
+  },
+  
+  // Update inventory item
+  async update(id, updateData) {
+    const result = await db.collection(COLLECTIONS.INVENTORY).updateOne(
+      { id },
+      { $set: { ...updateData, updatedAt: new Date() } }
+    );
+    
+    if (result.matchedCount > 0) {
+      return await this.getById(id);
+    }
+    return null;
+  },
+  
+  // Delete inventory item
+  async delete(id) {
+    try {
+      const result = await db.collection(COLLECTIONS.INVENTORY).deleteOne({ _id: id });
+      return result.deletedCount > 0;
+    } catch (error) {
+      console.error('Error deleting inventory item:', error);
+      throw error;
+    }
+  },
+  
+  // Get low stock items
+  async getLowStock() {
+    return await db.collection(COLLECTIONS.INVENTORY)
+      .find({ $expr: { $lt: ['$quantity', '$lowStockThreshold'] } })
+      .sort({ quantity: 1 })
+      .toArray();
+  },
+  
+  // Update inventory quantity
+  async updateQuantity(id, quantity, operation = 'set') {
+    const update = operation === 'add' 
+      ? { $inc: { quantity }, $set: { updatedAt: new Date() } }
+      : { $set: { quantity, updatedAt: new Date() } };
+    
+    const result = await db.collection(COLLECTIONS.INVENTORY).updateOne({ id }, update);
+    return result.matchedCount > 0;
+  }
+};
+
+const OrderOperations = {
+  // Get all orders with optional filters
+  async getAll(filters = {}) {
+    const query = {};
+    if (filters.customerId) query.customerId = filters.customerId;
+    if (filters.status) query.status = filters.status;
+    if (filters.platform) query.platform = filters.platform;
+    
+    return await db.collection(COLLECTIONS.ORDERS)
+      .find(query)
+      .sort({ createdAt: -1 })
+      .toArray();
+  },
+  
+  // Get order by ID
+  async getById(orderId) {
+    return await db.collection(COLLECTIONS.ORDERS).findOne({ orderId });
+  },
+  
+  // Get orders by customer ID
+  async getByCustomerId(customerId) {
+    return await db.collection(COLLECTIONS.ORDERS)
+      .find({ customerId })
+      .sort({ createdAt: -1 })
+      .toArray();
+  },
+  
+  // Get orders by date range
+  async getByDateRange(startDate, endDate = new Date()) {
+    return await db.collection(COLLECTIONS.ORDERS)
+      .find({
+        createdAt: {
+          $gte: startDate,
+          $lte: endDate
+        }
+      })
+      .sort({ createdAt: -1 })
+      .toArray();
+  },
+  
+  // Create new order
+  async create(order) {
+    const newOrder = {
+      ...order,
+      id: `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    
+    await db.collection(COLLECTIONS.ORDERS).insertOne(newOrder);
+    return newOrder;
+  },
+  
+  // Update order status
+  async updateStatus(orderId, status, updatedBy = 'system') {
+    const result = await db.collection(COLLECTIONS.ORDERS).updateOne(
+      { orderId },
+      { 
+        $set: { 
+          status, 
+          updatedAt: new Date(),
+          updatedBy
+        } 
+      }
+    );
+    
+    if (result.matchedCount > 0) {
+      return await this.getById(orderId);
+    }
+    return null;
+  },
+  
+  // Update order
+  async update(orderId, updateData) {
+    const result = await db.collection(COLLECTIONS.ORDERS).updateOne(
+      { orderId },
+      { $set: { ...updateData, updatedAt: new Date() } }
+    );
+    
+    if (result.matchedCount > 0) {
+      return await this.getById(orderId);
+    }
+    return null;
+  },
+  
+  // Delete order
+  async delete(orderId) {
+    const result = await db.collection(COLLECTIONS.ORDERS).deleteOne({ orderId });
+    return result.deletedCount > 0;
+  },
+  
+  // Get order statistics
+  async getStats(startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)) {
+    const matchStage = startDate ? { createdAt: { $gte: startDate } } : {};
+    
+    const stats = await db.collection(COLLECTIONS.ORDERS)
+      .aggregate([
+        { $match: matchStage },
+        {
+          $group: {
+            _id: '$status',
+            count: { $sum: 1 },
+            totalAmount: { $sum: '$totalAmount' }
+          }
+        }
+      ])
+      .toArray();
+    
+    return stats.reduce((acc, stat) => {
+      acc[stat._id] = { count: stat.count, totalAmount: stat.totalAmount };
+      return acc;
+    }, {});
+  },
+
+  // Get order by ID
+  async getById(orderId) {
+    try {
+      const order = await db.collection(COLLECTIONS.ORDERS).findOne({ 
+        $or: [
+          { _id: orderId },
+          { id: orderId },
+          { orderId: orderId }
+        ]
+      });
+      return order;
+    } catch (error) {
+      console.error('Error getting order by ID:', error);
+      throw error;
+    }
+  },
+
+  // Update order status
+  async updateStatus(orderId, status, updatedBy = 'admin') {
+    try {
+      const result = await db.collection(COLLECTIONS.ORDERS).findOneAndUpdate(
+        { 
+          $or: [
+            { _id: orderId },
+            { id: orderId },
+            { orderId: orderId }
+          ]
+        },
+        { 
+          $set: { 
+            status, 
+            updatedAt: new Date().toISOString(),
+            updatedBy
+          }
+        },
+        { returnDocument: 'after' }
+      );
+      return result.value;
+    } catch (error) {
+      console.error('Error updating order status:', error);
+      throw error;
+    }
+  },
+
+  // Get orders by customer ID
+  async getByCustomerId(customerId) {
+    try {
+      const orders = await db.collection(COLLECTIONS.ORDERS)
+        .find({ customerId })
+        .sort({ createdAt: -1 })
+        .toArray();
+      return orders;
+    } catch (error) {
+      console.error('Error getting orders by customer ID:', error);
+      throw error;
+    }
+  }
+};
+
 module.exports = {
   connectDatabase,
   getDatabase,
@@ -347,5 +774,7 @@ module.exports = {
   ApprovalOperations,
   CustomerOperations,
   AuditOperations,
+  InventoryOperations,
+  OrderOperations,
   COLLECTIONS
 };

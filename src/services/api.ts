@@ -371,6 +371,217 @@ export class ApiService {
     return response.json();
   }
 
+  // Inventory API methods
+  async getInventory(): Promise<any[]> {
+    const response = await fetch(`${API_BASE_URL}/api/inventory`, {
+      headers: {
+        'Authorization': `Bearer ${ADMIN_API_KEY}`
+      }
+    });
+    if (!response.ok) throw new Error('Failed to fetch inventory');
+    const result = await response.json();
+    return result.data;
+  }
+
+  async addInventoryItem(item: {
+    name: string;
+    sku: string;
+    quantity: number;
+    unit: string;
+    price: number;
+    lowStockThreshold?: number;
+  }): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/api/inventory`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${ADMIN_API_KEY}`
+      },
+      body: JSON.stringify(item)
+    });
+    if (!response.ok) throw new Error('Failed to add inventory item');
+    const result = await response.json();
+    return result.data;
+  }
+
+  async updateInventoryItem(id: string, updateData: {
+    name?: string;
+    quantity?: number;
+    unit?: string;
+    price?: number;
+    lowStockThreshold?: number;
+  }): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/api/inventory/${id}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${ADMIN_API_KEY}`
+      },
+      body: JSON.stringify(updateData)
+    });
+    if (!response.ok) throw new Error('Failed to update inventory item');
+    const result = await response.json();
+    return result.data;
+  }
+
+  async deleteInventoryItem(id: string): Promise<void> {
+    const response = await fetch(`${API_BASE_URL}/api/inventory/${id}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${ADMIN_API_KEY}`
+      }
+    });
+    if (!response.ok) throw new Error('Failed to delete inventory item');
+  }
+
+  // Orders API methods
+  async getOrders(filters?: {
+    customerId?: string;
+    status?: string;
+    platform?: string;
+  }): Promise<any[]> {
+    const params = new URLSearchParams(filters as any).toString();
+    const response = await fetch(`${API_BASE_URL}/api/orders${params ? '?' + params : ''}`, {
+      headers: {
+        'Authorization': `Bearer ${ADMIN_API_KEY}`
+      }
+    });
+    if (!response.ok) throw new Error('Failed to fetch orders');
+    const result = await response.json();
+    return result.data;
+  }
+
+  async createOrder(order: {
+    customerId: string;
+    customerName: string;
+    customerPhone: string;
+    items: Array<{
+      product: string;
+      quantity: number;
+      price: number;
+      unit: string;
+    }>;
+    platform?: string;
+  }): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/api/orders`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${ADMIN_API_KEY}`
+      },
+      body: JSON.stringify(order)
+    });
+    if (!response.ok) throw new Error('Failed to create order');
+    const result = await response.json();
+    return result.data;
+  }
+
+  // Activity API method
+  async getActivity(timeRange: string = '24h'): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/api/activity?timeRange=${timeRange}`, {
+      headers: {
+        'Authorization': `Bearer ${ADMIN_API_KEY}`
+      }
+    });
+    if (!response.ok) throw new Error('Failed to fetch activity data');
+    const result = await response.json();
+    return result.data;
+  }
+
+  // WebSocket event listeners for new features
+  onInventoryUpdate(callback: (data: any) => void) {
+    this.wsService.on('inventory_updated', callback);
+  }
+
+  onLowStockWarning(callback: (data: any) => void) {
+    this.wsService.on('low_stock_warning', callback);
+  }
+
+  onNewOrder(callback: (data: any) => void) {
+    this.wsService.on('new_order', callback);
+  }
+
+  onNewApproval(callback: (data: any) => void) {
+    this.wsService.on('new_approval', callback);
+  }
+
+  // Order tracking methods
+  async getOrderById(orderId: string) {
+    const response = await fetch(`${API_BASE_URL}/api/orders/${orderId}`, {
+      headers: {
+        'Authorization': `Bearer ${ADMIN_API_KEY}`
+      }
+    });
+    if (!response.ok) throw new Error('Failed to fetch order');
+    const result = await response.json();
+    return result.data;
+  }
+
+  async updateOrderStatus(orderId: string, status: string, updatedBy?: string) {
+    const response = await fetch(`${API_BASE_URL}/api/orders/${orderId}/status`, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${ADMIN_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ status, updatedBy })
+    });
+    if (!response.ok) throw new Error('Failed to update order status');
+    const result = await response.json();
+    return result.data;
+  }
+
+  async getOrdersByCustomerId(customerId: string) {
+    const response = await fetch(`${API_BASE_URL}/api/orders/customer/${customerId}`, {
+      headers: {
+        'Authorization': `Bearer ${ADMIN_API_KEY}`
+      }
+    });
+    if (!response.ok) throw new Error('Failed to fetch customer orders');
+    const result = await response.json();
+    return result.data;
+  }
+
+  async getTrackingInfo(trackingId: string) {
+    const response = await fetch(`${API_BASE_URL}/api/orders/tracking/${trackingId}`, {
+      headers: {
+        'Authorization': `Bearer ${ADMIN_API_KEY}`
+      }
+    });
+    if (!response.ok) throw new Error('Failed to fetch tracking info');
+    const result = await response.json();
+    return result.data;
+  }
+
+  onOrderStatusUpdate(callback: (data: any) => void) {
+    this.wsService.on('order_status_updated', callback);
+  }
+
+  // Low stock warning methods
+  async getLowStockItems() {
+    const response = await fetch(`${API_BASE_URL}/api/inventory/low-stock`, {
+      headers: {
+        'Authorization': `Bearer ${ADMIN_API_KEY}`
+      }
+    });
+    if (!response.ok) throw new Error('Failed to fetch low stock items');
+    const result = await response.json();
+    return result.data;
+  }
+
+  async checkLowStock() {
+    const response = await fetch(`${API_BASE_URL}/api/inventory/check-low-stock`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${ADMIN_API_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    if (!response.ok) throw new Error('Failed to check low stock');
+    const result = await response.json();
+    return result.data;
+  }
+
   // Health check
   async healthCheck(): Promise<{ status: string; services: Record<string, string> }> {
     const response = await fetch(`${API_BASE_URL}/health`);

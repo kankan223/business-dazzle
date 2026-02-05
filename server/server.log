@@ -1,86 +1,10 @@
 nohup: ignoring input
-
-> bharat-biz-agent-server@1.0.0 start
-> node index.js
-
-[dotenv@17.2.3] injecting env (12) from .env -- tip: 🔐 prevent building .env in docker: https://dotenvx.com/prebuild
+[dotenv@17.2.3] injecting env (12) from .env -- tip: 🔑 add access controls to secrets: https://dotenvx.com/ops
+⚠️ Google Cloud Speech-to-Text not configured, using fallback
 ✅ Telegram bot configured
-(node:49388) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(node:14276) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
 (Use `node --trace-deprecation ...` to show where the warning was created)
-✅ Connected to MongoDB database
-✅ Database indexes created successfully
-✅ Database connected successfully
-
-╔══════════════════════════════════════════════════════════╗
-║          Bharat Biz-Agent - Bot Server                   ║
-║                                                          ║
-║  🔐 Encryption:    AES-256-GCM Enabled                   ║
-║  📱 WhatsApp:      ✅ Configured  
-║  ✈️  Telegram:     ✅ Configured  
-║  🔑 Admin API:     ✅ Configured  
-║  🤖 AI Service:    ✅ Configured  
-║  💾 Database:      ✅ Connected                           ║
-║                                                          ║
-║  🌐 Server:        http://localhost:3002              ║
-║  💚 Health:        http://localhost:3002/health       ║
-╚══════════════════════════════════════════════════════════╝
-    
-[INFO] Server Started: Server listening on port 3002
-🔌 Admin dashboard connected: oERY58EDV6oGxExDAAAB
-(node:49388) MetadataLookupWarning: received unexpected error = All promises were rejected code = UNKNOWN
-🔌 Admin dashboard connected: NDK350AfH8t3T8Y0AAAD
-AI processing error: GoogleGenerativeAIFetchError: [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
-* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.5-pro
-* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.5-pro
-* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.5-pro
-* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.5-pro
-Please retry in 55.971685461s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerDay-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.5-pro"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.5-pro"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.5-pro","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.5-pro"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"55s"}]
-    at handleResponseNotOk (/home/ken/neura_dazzle/dazzle/app/server/node_modules/@google/generative-ai/dist/index.js:434:11)
-    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
-    at async makeRequest (/home/ken/neura_dazzle/dazzle/app/server/node_modules/@google/generative-ai/dist/index.js:403:9)
-    at async generateContent (/home/ken/neura_dazzle/dazzle/app/server/node_modules/@google/generative-ai/dist/index.js:867:22)
-    at async GeminiAIService.processCustomerMessage (/home/ken/neura_dazzle/dazzle/app/server/gemini-service.js:93:22)
-    at async processDirectCommand (/home/ken/neura_dazzle/dazzle/app/server/index.js:1301:24)
-    at async /home/ken/neura_dazzle/dazzle/app/server/index.js:1491:22 {
-  status: 429,
-  statusText: 'Too Many Requests',
-  errorDetails: [
-    { '@type': 'type.googleapis.com/google.rpc.Help', links: [Array] },
-    {
-      '@type': 'type.googleapis.com/google.rpc.QuotaFailure',
-      violations: [Array]
-    },
-    {
-      '@type': 'type.googleapis.com/google.rpc.RetryInfo',
-      retryDelay: '55s'
-    }
-  ]
-}
-🔌 Admin dashboard disconnected: oERY58EDV6oGxExDAAAB
-📡 Broadcasting admin_disconnected to admins: {
-  socketId: 'oERY58EDV6oGxExDAAAB',
-  timestamp: '2026-02-05T05:25:18.560Z'
-}
-🔌 Admin dashboard disconnected: NDK350AfH8t3T8Y0AAAD
-📡 Broadcasting admin_disconnected to admins: {
-  socketId: 'NDK350AfH8t3T8Y0AAAD',
-  timestamp: '2026-02-05T05:25:18.596Z'
-}
-🔌 Admin dashboard connected: M4o7soemsGudKAXFAAAF
-🔌 Admin dashboard connected: HFlQrQuyyyu9MuNKAAAH
-🔌 Admin dashboard disconnected: HFlQrQuyyyu9MuNKAAAH
-📡 Broadcasting admin_disconnected to admins: {
-  socketId: 'HFlQrQuyyyu9MuNKAAAH',
-  timestamp: '2026-02-05T05:43:16.981Z'
-}
-🔌 Admin dashboard disconnected: M4o7soemsGudKAXFAAAF
-📡 Broadcasting admin_disconnected to admins: {
-  socketId: 'M4o7soemsGudKAXFAAAF',
-  timestamp: '2026-02-05T05:43:16.983Z'
-}
-🔌 Admin dashboard connected: _WXevnYR_vPVX_fNAAAJ
-🔌 Admin dashboard connected: Gi-sGGC7T4_jzPNNAAAL
-🚨 Telegram polling error: FatalError: EFATAL: Error: read ETIMEDOUT
+🚨 Telegram polling error: FatalError: EFATAL: AggregateError
     at new RequestError (/home/ken/neura_dazzle/dazzle/app/server/node_modules/request-promise-core/lib/errors.js:14:15)
     at plumbing.callback (/home/ken/neura_dazzle/dazzle/app/server/node_modules/request-promise-core/lib/plumbing.js:87:29)
     at Request.RP$callback [as _callback] (/home/ken/neura_dazzle/dazzle/app/server/node_modules/request-promise-core/lib/plumbing.js:46:31)
@@ -104,8 +28,112 @@ From previous event:
     at TelegramBot.getUpdates (/home/ken/neura_dazzle/dazzle/app/server/node_modules/node-telegram-bot-api/src/telegram.js:794:17)
     at TelegramBotPolling._getUpdates (/home/ken/neura_dazzle/dazzle/app/server/node_modules/node-telegram-bot-api/src/telegramPolling.js:190:21)
     at TelegramBotPolling._polling (/home/ken/neura_dazzle/dazzle/app/server/node_modules/node-telegram-bot-api/src/telegramPolling.js:102:8)
-    at Timeout._onTimeout (/home/ken/neura_dazzle/dazzle/app/server/node_modules/node-telegram-bot-api/src/telegramPolling.js:168:56)
-    at listOnTimeout (node:internal/timers:605:17)
-    at process.processTimers (node:internal/timers:541:7) {
+    at TelegramBotPolling.start (/home/ken/neura_dazzle/dazzle/app/server/node_modules/node-telegram-bot-api/src/telegramPolling.js:48:17)
+    at TelegramBot.startPolling (/home/ken/neura_dazzle/dazzle/app/server/node_modules/node-telegram-bot-api/src/telegram.js:406:26)
+    at new TelegramBot (/home/ken/neura_dazzle/dazzle/app/server/node_modules/node-telegram-bot-api/src/telegram.js:177:14)
+    at Object.<anonymous> (/home/ken/neura_dazzle/dazzle/app/server/index.js:208:17)
+    at Module._compile (node:internal/modules/cjs/loader:1803:14)
+    at Object..js (node:internal/modules/cjs/loader:1934:10)
+    at Module.load (node:internal/modules/cjs/loader:1524:32)
+    at Module._load (node:internal/modules/cjs/loader:1326:12)
+    at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:245:24)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47 {
   code: 'EFATAL'
 }
+❌ Database connection error: MongoServerSelectionError: connect ECONNREFUSED ::1:27017, connect ECONNREFUSED 127.0.0.1:27017
+    at Topology.selectServer (/home/ken/neura_dazzle/dazzle/app/server/node_modules/mongodb/lib/sdam/topology.js:347:38)
+    at async Topology._connect (/home/ken/neura_dazzle/dazzle/app/server/node_modules/mongodb/lib/sdam/topology.js:220:28)
+    at async Topology.connect (/home/ken/neura_dazzle/dazzle/app/server/node_modules/mongodb/lib/sdam/topology.js:171:13)
+    at async topologyConnect (/home/ken/neura_dazzle/dazzle/app/server/node_modules/mongodb/lib/mongo_client.js:258:17)
+    at async MongoClient._connect (/home/ken/neura_dazzle/dazzle/app/server/node_modules/mongodb/lib/mongo_client.js:271:13)
+    at async MongoClient.connect (/home/ken/neura_dazzle/dazzle/app/server/node_modules/mongodb/lib/mongo_client.js:196:13)
+    at async connectDatabase (/home/ken/neura_dazzle/dazzle/app/server/database.js:32:5)
+    at async startServer (/home/ken/neura_dazzle/dazzle/app/server/index.js:2091:5) {
+  errorLabelSet: Set(0) {},
+  reason: TopologyDescription {
+    type: 'Unknown',
+    servers: Map(1) { 'localhost:27017' => [ServerDescription] },
+    stale: false,
+    compatible: true,
+    heartbeatFrequencyMS: 10000,
+    localThresholdMS: 15,
+    setName: null,
+    maxElectionId: null,
+    maxSetVersion: null,
+    commonWireVersion: 0,
+    logicalSessionTimeoutMinutes: null
+  },
+  code: undefined,
+  [cause]: MongoNetworkError: connect ECONNREFUSED ::1:27017, connect ECONNREFUSED 127.0.0.1:27017
+      at Socket.<anonymous> (/home/ken/neura_dazzle/dazzle/app/server/node_modules/mongodb/lib/cmap/connect.js:297:44)
+      at Object.onceWrapper (node:events:623:12)
+      at Socket.emit (node:events:508:20)
+      at emitErrorNT (node:internal/streams/destroy:170:8)
+      at emitErrorCloseNT (node:internal/streams/destroy:129:3)
+      at process.processTicksAndRejections (node:internal/process/task_queues:90:21) {
+    errorLabelSet: Set(3) { 'SystemOverloadedError', 'RetryableError', 'ResetPool' },
+    beforeHandshake: false,
+    [cause]: AggregateError [ECONNREFUSED]: 
+        at internalConnectMultiple (node:net:1134:18)
+        at afterConnectMultiple (node:net:1715:7) {
+      code: 'ECONNREFUSED',
+      [errors]: [Array]
+    }
+  }
+}
+⚠️ Using in-memory fallback database (data will be lost on restart)
+❌ Error initializing default data: TypeError: db.collection(...).insertMany is not a function
+    at initializeDefaultData (/home/ken/neura_dazzle/dazzle/app/server/database.js:217:45)
+    at async connectDatabase (/home/ken/neura_dazzle/dazzle/app/server/database.js:50:5)
+    at async startServer (/home/ken/neura_dazzle/dazzle/app/server/index.js:2091:5)
+✅ Database connected successfully
+
+╔══════════════════════════════════════════════════════════╗
+║          Bharat Biz-Agent - Bot Server                   ║
+║                                                          ║
+║  🔐 Encryption:    AES-256-GCM Enabled                   ║
+║  📱 WhatsApp:      ✅ Configured  
+║  ✈️  Telegram:     ✅ Configured  
+║  🔑 Admin API:     ✅ Configured  
+║  🤖 AI Service:    ✅ Configured  
+║  💾 Database:      ✅ Connected                           ║
+║                                                          ║
+║  🌐 Server:        http://localhost:3002              ║
+║  💚 Health:        http://localhost:3002/health       ║
+╚══════════════════════════════════════════════════════════╝
+    
+[INFO] Server Started: Server listening on port 3002
+Error fetching activity data: TypeError: ApprovalOperations.getByDateRange is not a function
+    at /home/ken/neura_dazzle/dazzle/app/server/index.js:1868:26
+    at Layer.handle [as handle_request] (/home/ken/neura_dazzle/dazzle/app/server/node_modules/express/lib/router/layer.js:95:5)
+    at next (/home/ken/neura_dazzle/dazzle/app/server/node_modules/express/lib/router/route.js:149:13)
+    at authenticateApiKey (/home/ken/neura_dazzle/dazzle/app/server/index.js:72:3)
+    at Layer.handle [as handle_request] (/home/ken/neura_dazzle/dazzle/app/server/node_modules/express/lib/router/layer.js:95:5)
+    at next (/home/ken/neura_dazzle/dazzle/app/server/node_modules/express/lib/router/route.js:149:13)
+    at Route.dispatch (/home/ken/neura_dazzle/dazzle/app/server/node_modules/express/lib/router/route.js:119:3)
+    at Layer.handle [as handle_request] (/home/ken/neura_dazzle/dazzle/app/server/node_modules/express/lib/router/layer.js:95:5)
+    at /home/ken/neura_dazzle/dazzle/app/server/node_modules/express/lib/router/index.js:284:15
+    at router.process_params (/home/ken/neura_dazzle/dazzle/app/server/node_modules/express/lib/router/index.js:346:12)
+    at next (/home/ken/neura_dazzle/dazzle/app/server/node_modules/express/lib/router/index.js:280:10)
+    at /home/ken/neura_dazzle/dazzle/app/server/node_modules/express-rate-limit/dist/index.cjs:807:7
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async /home/ken/neura_dazzle/dazzle/app/server/node_modules/express-rate-limit/dist/index.cjs:691:5
+Error fetching activity data: TypeError: ApprovalOperations.getByDateRange is not a function
+    at /home/ken/neura_dazzle/dazzle/app/server/index.js:1868:26
+    at Layer.handle [as handle_request] (/home/ken/neura_dazzle/dazzle/app/server/node_modules/express/lib/router/layer.js:95:5)
+    at next (/home/ken/neura_dazzle/dazzle/app/server/node_modules/express/lib/router/route.js:149:13)
+    at authenticateApiKey (/home/ken/neura_dazzle/dazzle/app/server/index.js:72:3)
+    at Layer.handle [as handle_request] (/home/ken/neura_dazzle/dazzle/app/server/node_modules/express/lib/router/layer.js:95:5)
+    at next (/home/ken/neura_dazzle/dazzle/app/server/node_modules/express/lib/router/route.js:149:13)
+    at Route.dispatch (/home/ken/neura_dazzle/dazzle/app/server/node_modules/express/lib/router/route.js:119:3)
+    at Layer.handle [as handle_request] (/home/ken/neura_dazzle/dazzle/app/server/node_modules/express/lib/router/layer.js:95:5)
+    at /home/ken/neura_dazzle/dazzle/app/server/node_modules/express/lib/router/index.js:284:15
+    at router.process_params (/home/ken/neura_dazzle/dazzle/app/server/node_modules/express/lib/router/index.js:346:12)
+    at next (/home/ken/neura_dazzle/dazzle/app/server/node_modules/express/lib/router/index.js:280:10)
+    at /home/ken/neura_dazzle/dazzle/app/server/node_modules/express-rate-limit/dist/index.cjs:807:7
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async /home/ken/neura_dazzle/dazzle/app/server/node_modules/express-rate-limit/dist/index.cjs:691:5
+Debugger listening on ws://127.0.0.1:9229/a6dceec9-6687-4187-b642-01a4d9e82b92
+For help, see: https://nodejs.org/en/docs/inspector

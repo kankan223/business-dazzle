@@ -33,18 +33,44 @@ const {
   ConversationOperations, 
   ApprovalOperations, 
   CustomerOperations, 
-  AuditOperations 
+  AuditOperations,
+  InventoryOperations,
+  OrderOperations
 } = require('./database');
 const geminiService = require('./gemini-service');
 const SpeechToTextService = require('./speech-service');
-const { 
-  securityMiddleware, 
-  createEnhancedRateLimit, 
-  validationSchemas, 
-  validateInput, 
-  privacyControls, 
-  securityHeaders 
-} = require('./security-enhancements');
+
+// API Key Authentication Middleware
+const authenticateApiKey = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ 
+      success: false, 
+      error: 'Authorization header required' 
+    });
+  }
+  
+  const token = authHeader.substring(7); // Remove 'Bearer ' prefix
+  const adminApiKey = process.env.ADMIN_API_KEY;
+  
+  if (!adminApiKey) {
+    console.error('ADMIN_API_KEY not configured in environment');
+    return res.status(500).json({ 
+      success: false, 
+      error: 'Server configuration error' 
+    });
+  }
+  
+  if (token !== adminApiKey) {
+    return res.status(401).json({ 
+      success: false, 
+      error: 'Invalid API key' 
+    });
+  }
+  
+  next();
+};
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -302,7 +328,6 @@ app.use(helmet({
   }
 }));
 
-app.use(securityHeaders);
 app.use(cors({
   origin: process.env.FRONTEND_URL || "http://localhost:5173",
   credentials: true
@@ -310,20 +335,20 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Enhanced rate limiting
-const apiLimiter = createEnhancedRateLimit({
+// Basic rate limiting
+const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100, // 100 requests per 15 minutes
   message: { error: 'API rate limit exceeded. Please try again later.' }
 });
 
-const commandLimiter = createEnhancedRateLimit({
+const commandLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
   max: 30, // 30 commands per minute
   message: { error: 'Too many commands. Please wait before trying again.' }
 });
 
-const speechLimiter = createEnhancedRateLimit({
+const speechLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
   max: 10, // 10 speech requests per minute
   message: { error: 'Too many speech requests. Please wait before trying again.' }
@@ -1532,21 +1557,391 @@ app.get('/api/speech-languages', (req, res) => {
       languages: languages
     });
   } catch (error) {
-    console.error('Languages error:', error);
-    res.status(500).json({ error: 'Failed to get languages' });
+    console.error('Error getting supported languages:', error);
+    res.status(500).json({ success: false, error: 'Failed to get supported languages' });
   }
 });
 
-// Health check
+// Inventory Management API
+app.get('/api/inventory', authenticateApiKey, async (req, res) => {
+  try {
+    const inventory = await InventoryOperations.getAll();
+    res.json({ success: true, data: inventory });
+  } catch (error) {
+    console.error('Error fetching inventory:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch inventory' });
+  }
+});
+
+app.post('/api/inventory', authenticateApiKey, async (req, res) => {
+  try {
+    const { name, sku, quantity, unit, price, lowStockThreshold } = req.body;
+    
+    if (!name || !sku || !quantity || !unit || !price) {
+      return res.status(400).json({ success: false, error: 'Missing required fields' });
+    }
+
+    const newItem = await InventoryOperations.create({
+      name,
+      sku: sku.toUpperCase(),
+      quantity: parseInt(quantity),
+      unit,
+      price: parseFloat(price),
+      lowStockThreshold: parseInt(lowStockThreshold) || Math.floor(parseInt(quantity) * 0.2),
+      inquiries: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+
+    // Broadcast inventory update
+    broadcastToAdmins('inventory_updated', { action: 'added', item: newItem });
+    
+    res.json({ success: true, data: newItem });
+  } catch (error) {
+    console.error('Error adding inventory item:', error);
+    res.status(500).json({ success: false, error: 'Failed to add inventory item' });
+  }
+});
+
+app.put('/api/inventory/:id', authenticateApiKey, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, quantity, unit, price, lowStockThreshold } = req.body;
+    
+    const updateData = {
+      ...(name && { name }),
+      ...(quantity && { quantity: parseInt(quantity) }),
+      ...(unit && { unit }),
+      ...(price && { price: parseFloat(price) }),
+      ...(lowStockThreshold && { lowStockThreshold: parseInt(lowStockThreshold) }),
+      updatedAt: new Date().toISOString()
+    };
+
+    const updatedItem = await InventoryOperations.update(id, updateData);
+    
+    if (!updatedItem) {
+      return res.status(404).json({ success: false, error: 'Inventory item not found' });
+    }
+
+    // Check for low stock warning
+    if (updatedItem.quantity < updatedItem.lowStockThreshold) {
+      broadcastToAdmins('low_stock_warning', { item: updatedItem });
+    }
+
+    // Broadcast inventory update
+    broadcastToAdmins('inventory_updated', { action: 'updated', item: updatedItem });
+    
+    res.json({ success: true, data: updatedItem });
+  } catch (error) {
+    console.error('Error updating inventory item:', error);
+    res.status(500).json({ success: false, error: 'Failed to update inventory item' });
+  }
+});
+
+// Low Stock Warning API
+app.get('/api/inventory/low-stock', authenticateApiKey, async (req, res) => {
+  try {
+    const lowStockItems = await InventoryOperations.getLowStock();
+    res.json({ success: true, data: lowStockItems });
+  } catch (error) {
+    console.error('Error fetching low stock items:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch low stock items' });
+  }
+});
+
+// Check and broadcast low stock warnings
+app.post('/api/inventory/check-low-stock', authenticateApiKey, async (req, res) => {
+  try {
+    const lowStockItems = await InventoryOperations.getLowStock();
+    
+    if (lowStockItems.length > 0) {
+      // Broadcast low stock warnings
+      broadcastToAdmins('low_stock_warning', { 
+        items: lowStockItems,
+        message: `⚠️ Low Stock Alert: ${lowStockItems.length} items need restocking`,
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    res.json({ 
+      success: true, 
+      data: { 
+        lowStockCount: lowStockItems.length,
+        items: lowStockItems
+      }
+    });
+  } catch (error) {
+    console.error('Error checking low stock:', error);
+    res.status(500).json({ success: false, error: 'Failed to check low stock' });
+  }
+});
+
+// Test AI Service endpoint
+app.post('/api/test-ai', authenticateApiKey, async (req, res) => {
+  try {
+    const { message } = req.body;
+    
+    if (!message) {
+      return res.status(400).json({ success: false, error: 'Message is required' });
+    }
+
+    // Test AI service with inventory sync
+    const aiResponse = await geminiService.processCustomerMessage(message, {
+      platform: 'test',
+      userId: 'test-user',
+      type: 'test'
+    });
+
+    res.json({ 
+      success: true, 
+      data: {
+        message: message,
+        response: aiResponse.response || aiResponse.text,
+        approvalNeeded: aiResponse.approvalNeeded,
+        confidence: aiResponse.confidence
+      }
+    });
+  } catch (error) {
+    console.error('AI test error:', error);
+    res.status(500).json({ success: false, error: 'Failed to process AI request' });
+  }
+});
+
+app.delete('/api/inventory/:id', authenticateApiKey, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const deleted = await InventoryOperations.delete(id);
+    
+    if (!deleted) {
+      return res.status(404).json({ success: false, error: 'Inventory item not found' });
+    }
+
+    // Broadcast inventory update
+    broadcastToAdmins('inventory_updated', { action: 'deleted', id });
+    
+    res.json({ success: true, message: 'Inventory item deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting inventory item:', error);
+    res.status(500).json({ success: false, error: 'Failed to delete inventory item' });
+  }
+});
+
+// Orders API
+app.get('/api/orders', authenticateApiKey, async (req, res) => {
+  try {
+    const { customerId, status } = req.query;
+    const orders = await OrderOperations.getAll({ customerId, status });
+    res.json({ success: true, data: orders });
+  } catch (error) {
+    console.error('Error fetching orders:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch orders' });
+  }
+});
+
+app.post('/api/orders', authenticateApiKey, async (req, res) => {
+  try {
+    const { customerId, customerName, customerPhone, items, platform } = req.body;
+    
+    if (!customerId || !items || !items.length) {
+      return res.status(400).json({ success: false, error: 'Missing required fields' });
+    }
+
+    const totalAmount = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    
+    const newOrder = await OrderOperations.create({
+      orderId: `ORD-${Date.now()}`,
+      customerId,
+      customerName,
+      customerPhone,
+      platform: platform || 'web',
+      items,
+      totalAmount,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+
+    // Broadcast new order
+    broadcastToAdmins('new_order', newOrder);
+    
+    res.json({ success: true, data: newOrder });
+  } catch (error) {
+    console.error('Error creating order:', error);
+    res.status(500).json({ success: false, error: 'Failed to create order' });
+  }
+});
+
+// Order tracking endpoints
+app.get('/api/orders/:orderId', authenticateApiKey, async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const order = await OrderOperations.getById(orderId);
+    
+    if (!order) {
+      return res.status(404).json({ success: false, error: 'Order not found' });
+    }
+    
+    res.json({ success: true, data: order });
+  } catch (error) {
+    console.error('Error fetching order:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch order' });
+  }
+});
+
+app.put('/api/orders/:orderId/status', authenticateApiKey, async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { status, updatedBy = 'admin' } = req.body;
+    
+    if (!status) {
+      return res.status(400).json({ success: false, error: 'Status is required' });
+    }
+    
+    const updatedOrder = await OrderOperations.updateStatus(orderId, status, updatedBy);
+    
+    if (!updatedOrder) {
+      return res.status(404).json({ success: false, error: 'Order not found' });
+    }
+    
+    // Broadcast order status update
+    broadcastToAdmins('order_status_updated', { orderId, status, updatedBy });
+    
+    res.json({ success: true, data: updatedOrder });
+  } catch (error) {
+    console.error('Error updating order status:', error);
+    res.status(500).json({ success: false, error: 'Failed to update order status' });
+  }
+});
+
+app.get('/api/orders/customer/:customerId', authenticateApiKey, async (req, res) => {
+  try {
+    const { customerId } = req.params;
+    const orders = await OrderOperations.getByCustomerId(customerId);
+    
+    res.json({ success: true, data: orders });
+  } catch (error) {
+    console.error('Error fetching customer orders:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch customer orders' });
+  }
+});
+
+app.get('/api/orders/tracking/:trackingId', authenticateApiKey, async (req, res) => {
+  try {
+    const { trackingId } = req.params;
+    
+    // Find order by tracking ID or order ID
+    let order = await OrderOperations.getById(trackingId);
+    
+    if (!order) {
+      // Try to find by orderId field
+      const allOrders = await OrderOperations.getAll();
+      order = allOrders.find(o => o.orderId === trackingId || o.id === trackingId);
+    }
+    
+    if (!order) {
+      return res.status(404).json({ success: false, error: 'Order not found' });
+    }
+    
+    // Add tracking information
+    const trackingInfo = {
+      ...order,
+      trackingHistory: [
+        {
+          status: 'Order Placed',
+          timestamp: order.createdAt,
+          location: 'Processing Center'
+        },
+        ...(order.status !== 'pending' ? [{
+          status: order.status,
+          timestamp: order.updatedAt,
+          location: order.status === 'delivered' ? 'Customer Address' : 'In Transit'
+        }] : [])
+      ],
+      estimatedDelivery: new Date(Date.parse(order.createdAt) + 24 * 60 * 60 * 1000).toISOString(),
+      currentStatus: order.status
+    };
+    
+    res.json({ success: true, data: trackingInfo });
+  } catch (error) {
+    console.error('Error fetching tracking info:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch tracking information' });
+  }
+});
+
+// Activity Overview API
+app.get('/api/activity', authenticateApiKey, async (req, res) => {
+  try {
+    const { timeRange = '24h' } = req.query;
+    
+    const now = new Date();
+    let startDate;
+    
+    switch (timeRange) {
+      case '1h':
+        startDate = new Date(now.getTime() - 60 * 60 * 1000);
+        break;
+      case '24h':
+        startDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        break;
+      case '7d':
+        startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        break;
+      case '30d':
+        startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        break;
+      default:
+        startDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    }
+
+    const [conversations, orders, approvals, inventory] = await Promise.all([
+      ConversationOperations.getByDateRange(startDate),
+      OrderOperations.getByDateRange(startDate),
+      ApprovalOperations.getByDateRange(startDate),
+      InventoryOperations.getAll()
+    ]);
+
+    const activity = {
+      timeRange,
+      summary: {
+        totalConversations: conversations.length,
+        totalOrders: orders.length,
+        pendingApprovals: approvals.filter(a => a.status === 'pending').length,
+        lowStockItems: inventory.filter(i => i.quantity < i.lowStockThreshold).length,
+        totalRevenue: orders.filter(o => o.status === 'delivered').reduce((sum, o) => sum + o.totalAmount, 0)
+      },
+      recentConversations: conversations.slice(0, 10),
+      recentOrders: orders.slice(0, 10),
+      pendingApprovals: approvals.filter(a => a.status === 'pending').slice(0, 10),
+      lowStockItems: inventory.filter(i => i.quantity < i.lowStockThreshold)
+    };
+
+    res.json({ success: true, data: activity });
+  } catch (error) {
+    console.error('Error fetching activity data:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch activity data' });
+  }
+});
+
+// WhatsApp Bot Webhook (placeholder for future implementation)
+app.post('/api/whatsapp/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  try {
+    // TODO: Implement WhatsApp Business API integration
+    console.log('WhatsApp webhook received:', req.body);
+    res.status(200).send('EVENT_RECEIVED');
+  } catch (error) {
+    console.error('Error handling WhatsApp webhook:', error);
+    res.status(500).send('Error processing webhook');
+  }
+});
+
+// Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ 
-    status: 'ok', 
+    status: 'healthy', 
     timestamp: new Date().toISOString(),
-    version: '1.0.0',
-    services: {
-      whatsapp: process.env.WHATSAPP_API_KEY ? 'configured' : 'not_configured',
-      telegram: (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_BOT_TOKEN !== 'your_telegram_bot_token_here') ? 'configured' : 'not_configured'
-    }
+    uptime: process.uptime(),
+    memory: process.memoryUsage(),
+    version: '1.0.0'
   });
 });
 
