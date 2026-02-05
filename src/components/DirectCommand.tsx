@@ -83,7 +83,7 @@ export const DirectCommand: React.FC<DirectCommandProps> = ({ onResponse }) => {
           </form>
 
           <div className="flex flex-wrap gap-2">
-            {quickCommands.map(({ cmd, desc }) => (
+            {quickCommands.map(({ cmd }) => (
               <Button
                 key={cmd}
                 variant="outline"

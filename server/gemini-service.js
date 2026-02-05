@@ -185,9 +185,10 @@ Please provide:
     
     // Check for price queries
     if (lowerMessage.includes('price') || lowerMessage.includes('cost') || lowerMessage.includes('rate')) {
-      if (lowerMessage.includes('rice')) {
+      // Check for specific products first (more specific matches first)
+      if (lowerMessage.includes('sugar')) {
         return {
-          response: '🌾 Rice is available at ₹35 per kg. Available in 5kg, 10kg, and 25kg packs. Would you like to place an order?',
+          response: '🍬 Sugar is available at ₹42 per kg. Available in 1kg and 5kg packs. Would you like to place an order?',
           approvalNeeded: false,
           confidence: 0.9,
           suggestedActions: ['process_order'],
@@ -201,17 +202,33 @@ Please provide:
           suggestedActions: ['process_order'],
           language: this.detectLanguage(message)
         };
-      } else if (lowerMessage.includes('sugar')) {
+      } else if (lowerMessage.includes('oil') || lowerMessage.includes('cooking oil')) {
         return {
-          response: '🍚 Sugar is available at ₹42 per kg. Available in 1kg and 5kg packs. Would you like to place an order?',
+          response: '🫒 Cooking Oil is available at ₹180 per litre. Available in 1L and 5L cans. Would you like to place an order?',
           approvalNeeded: false,
           confidence: 0.9,
           suggestedActions: ['process_order'],
           language: this.detectLanguage(message)
         };
-      } else if (lowerMessage.includes('oil')) {
+      } else if (lowerMessage.includes('turmeric')) {
         return {
-          response: '🫒 Cooking Oil is available at ₹180 per litre. Available in 1L and 5L cans. Would you like to place an order?',
+          response: '🟡 Turmeric Powder is available at ₹120 per kg. Available in 100g and 500g packs. Would you like to place an order?',
+          approvalNeeded: false,
+          confidence: 0.9,
+          suggestedActions: ['process_order'],
+          language: this.detectLanguage(message)
+        };
+      } else if (lowerMessage.includes('chilli') || lowerMessage.includes('chili')) {
+        return {
+          response: '🌶️ Red Chilli Powder is available at ₹85 per kg. Available in 100g and 500g packs. Would you like to place an order?',
+          approvalNeeded: false,
+          confidence: 0.9,
+          suggestedActions: ['process_order'],
+          language: this.detectLanguage(message)
+        };
+      } else if (lowerMessage.includes('rice')) {
+        return {
+          response: '� Rice is available at ₹35 per kg. Available in 5kg, 10kg, and 25kg packs. Would you like to place an order?',
           approvalNeeded: false,
           confidence: 0.9,
           suggestedActions: ['process_order'],

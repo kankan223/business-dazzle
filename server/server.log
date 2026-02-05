@@ -68,3 +68,44 @@ Please retry in 55.971685461s. [{"@type":"type.googleapis.com/google.rpc.Help","
 }
 🔌 Admin dashboard connected: M4o7soemsGudKAXFAAAF
 🔌 Admin dashboard connected: HFlQrQuyyyu9MuNKAAAH
+🔌 Admin dashboard disconnected: HFlQrQuyyyu9MuNKAAAH
+📡 Broadcasting admin_disconnected to admins: {
+  socketId: 'HFlQrQuyyyu9MuNKAAAH',
+  timestamp: '2026-02-05T05:43:16.981Z'
+}
+🔌 Admin dashboard disconnected: M4o7soemsGudKAXFAAAF
+📡 Broadcasting admin_disconnected to admins: {
+  socketId: 'M4o7soemsGudKAXFAAAF',
+  timestamp: '2026-02-05T05:43:16.983Z'
+}
+🔌 Admin dashboard connected: _WXevnYR_vPVX_fNAAAJ
+🔌 Admin dashboard connected: Gi-sGGC7T4_jzPNNAAAL
+🚨 Telegram polling error: FatalError: EFATAL: Error: read ETIMEDOUT
+    at new RequestError (/home/ken/neura_dazzle/dazzle/app/server/node_modules/request-promise-core/lib/errors.js:14:15)
+    at plumbing.callback (/home/ken/neura_dazzle/dazzle/app/server/node_modules/request-promise-core/lib/plumbing.js:87:29)
+    at Request.RP$callback [as _callback] (/home/ken/neura_dazzle/dazzle/app/server/node_modules/request-promise-core/lib/plumbing.js:46:31)
+    at self.callback (/home/ken/neura_dazzle/dazzle/app/server/node_modules/request/request.js:185:22)
+    at Request.emit (node:events:508:20)
+    at Request.onRequestError (/home/ken/neura_dazzle/dazzle/app/server/node_modules/request/request.js:877:8)
+    at ClientRequest.emit (node:events:508:20)
+    at emitErrorEvent (node:_http_client:108:11)
+    at TLSSocket.socketErrorListener (node:_http_client:575:5)
+    at TLSSocket.emit (node:events:508:20)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3)
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)
+    at plumbing.init (/home/ken/neura_dazzle/dazzle/app/server/node_modules/request-promise-core/lib/plumbing.js:36:28)
+    at Request.RP$initInterceptor [as init] (/home/ken/neura_dazzle/dazzle/app/server/node_modules/request-promise-core/configure/request2.js:41:27)
+    at new Request (/home/ken/neura_dazzle/dazzle/app/server/node_modules/request/request.js:127:8)
+    at request (/home/ken/neura_dazzle/dazzle/app/server/node_modules/request/index.js:53:10)
+    at TelegramBot._request (/home/ken/neura_dazzle/dazzle/app/server/node_modules/node-telegram-bot-api/src/telegram.js:286:12)
+From previous event:
+    at TelegramBot._request (/home/ken/neura_dazzle/dazzle/app/server/node_modules/node-telegram-bot-api/src/telegram.js:300:15)
+    at TelegramBot.getUpdates (/home/ken/neura_dazzle/dazzle/app/server/node_modules/node-telegram-bot-api/src/telegram.js:794:17)
+    at TelegramBotPolling._getUpdates (/home/ken/neura_dazzle/dazzle/app/server/node_modules/node-telegram-bot-api/src/telegramPolling.js:190:21)
+    at TelegramBotPolling._polling (/home/ken/neura_dazzle/dazzle/app/server/node_modules/node-telegram-bot-api/src/telegramPolling.js:102:8)
+    at Timeout._onTimeout (/home/ken/neura_dazzle/dazzle/app/server/node_modules/node-telegram-bot-api/src/telegramPolling.js:168:56)
+    at listOnTimeout (node:internal/timers:605:17)
+    at process.processTimers (node:internal/timers:541:7) {
+  code: 'EFATAL'
+}

@@ -202,7 +202,7 @@ function App() {
       });
     });
     
-    apiService.onNewApproval((data) => {
+    apiService.onNewMessage((data: any) => {
       setApprovals(prev => [data, ...prev]);
       toast.info('New approval request received');
     });

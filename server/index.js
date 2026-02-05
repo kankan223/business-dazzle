@@ -710,6 +710,9 @@ async function handleTelegramMessage(message, clientIp) {
 
   console.log(`📱 Telegram message from ${from.username || from.first_name}`);
 
+  // Generate unique customer ID for cross-platform synchronization
+  const customerId = `telegram-${chatId.toString()}`;
+  
   let content = '';
   let mediaUrl = null;
   let messageType = 'text';
@@ -754,33 +757,39 @@ async function handleTelegramMessage(message, clientIp) {
     mediaUrl = message.document.file_id;
   }
 
+  // Check if content is empty
+  if (!content || content.trim() === '') {
+    console.log('⚠️ Empty message received, ignoring...');
+    return;
+  }
+
   const language = detectLanguage(content);
 
   try {
-    // Get or create customer
+    // Get or create customer with unique ID
     const customer = {
-      phone: chatId.toString(),
+      phone: customerId, // Use unique ID instead of just chatId
       name: from.first_name + (from.last_name ? ' ' + from.last_name : ''),
       platform: 'telegram',
       language
     };
     await CustomerOperations.upsert(customer);
 
-    // Get or create conversation
-    let conversation = await ConversationOperations.getByCustomerId(chatId.toString());
+    // Get or create conversation using unique customer ID
+    let conversation = await ConversationOperations.getByCustomerId(customerId);
     if (!conversation || conversation.length === 0) {
       await ConversationOperations.upsert({
-        customerId: chatId.toString(),
+        customerId: customerId, // Use unique ID
         botId: 'telegram-bot-001',
         customerName: customer.name,
         customerPhone: customer.phone,
         messages: []
       });
-      conversation = await ConversationOperations.getByCustomerId(chatId.toString());
+      conversation = await ConversationOperations.getByCustomerId(customerId);
     }
 
     // Add customer message to conversation
-    await ConversationOperations.addMessage(chatId.toString(), 'telegram-bot-001', {
+    await ConversationOperations.addMessage(customerId, 'telegram-bot-001', {
       sender: 'customer',
       text: content,
       content: content, // For backward compatibility
@@ -798,16 +807,17 @@ async function handleTelegramMessage(message, clientIp) {
       language
     };
 
-    // Process with AI using the same function as web commands
-    const aiResponse = await processDirectCommand(content, 'telegram', chatId.toString());
+    // Process with AI using same function as web commands
+    const aiResponse = await processDirectCommand(content, 'telegram', customerId);
     
     // Add bot response to conversation
-    await ConversationOperations.addMessage(chatId.toString(), 'telegram-bot-001', {
+    await ConversationOperations.addMessage(customerId, 'telegram-bot-001', {
       sender: 'bot',
       text: aiResponse.response || aiResponse.text,
       content: aiResponse.response || aiResponse.text, // For backward compatibility
       timestamp: new Date().toISOString(),
-      type: 'text'
+      type: 'text',
+      translated: false
     });
 
     // Update bot metrics
@@ -845,11 +855,11 @@ async function handleTelegramMessage(message, clientIp) {
       await telegramBot.sendMessage(chatId, "⏳ Your request requires admin approval. We'll get back to you shortly.");
     } else {
       // Send AI response directly
-      await telegramBot.sendMessage(chatId, aiResponse.response);
+      await telegramBot.sendMessage(chatId, aiResponse.response || aiResponse.text);
     }
 
     // Broadcast new message to admin dashboard
-    const updatedConversation = await ConversationOperations.getByCustomerId(chatId.toString());
+    const updatedConversation = await ConversationOperations.getByCustomerId(customerId);
     if (updatedConversation && updatedConversation.length > 0) {
       broadcastToAdmins('new_message', updatedConversation[0]);
     }
