@@ -39,6 +39,10 @@ const {
 } = require('./database');
 const geminiService = require('./gemini-service');
 const SpeechToTextService = require('./speech-service');
+const AIService = require('./ai-service');
+const VoiceService = require('./voice-server');
+const InvoiceService = require('./invoice-service');
+const { securityHeaders, validate, sanitizeInput } = require('./security-middleware');
 
 // API Key Authentication Middleware
 const authenticateApiKey = (req, res, next) => {
@@ -82,6 +86,9 @@ if (!fs.existsSync('uploads')) {
 
 // Initialize services
 const speechService = new SpeechToTextService();
+const aiService = new AIService();
+const voiceService = new VoiceService();
+const invoiceService = new InvoiceService();
 
 // Create HTTP server for WebSocket support
 const server = http.createServer(app);
@@ -332,8 +339,10 @@ app.use(cors({
   origin: process.env.FRONTEND_URL || "http://localhost:5173",
   credentials: true
 }));
+app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(securityHeaders);
 
 // Basic rate limiting
 const apiLimiter = rateLimit({
@@ -1919,6 +1928,88 @@ app.get('/api/activity', authenticateApiKey, async (req, res) => {
   } catch (error) {
     console.error('Error fetching activity data:', error);
     res.status(500).json({ success: false, error: 'Failed to fetch activity data' });
+  }
+});
+
+// Invoice generation endpoint
+app.post('/api/invoices/generate', authenticateApiKey, async (req, res) => {
+  try {
+    const { orderId } = req.body;
+    
+    if (!orderId) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Order ID is required' 
+      });
+    }
+    
+    const invoice = await invoiceService.generateInvoice(orderId);
+    res.json({ 
+      success: true, 
+      data: invoice 
+    });
+  } catch (error) {
+    console.error('Invoice generation error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to generate invoice' 
+    });
+  }
+});
+
+// Voice service endpoint
+app.post('/api/voice/transcribe', authenticateApiKey, speechService.upload.single('audio'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'No audio file provided' 
+      });
+    }
+    
+    const { language = 'en-US' } = req.body;
+    const transcription = await voiceService.transcribeAudio(req.file.path, language);
+    
+    // Clean up uploaded file
+    fs.unlinkSync(req.file.path);
+    
+    res.json({ 
+      success: true, 
+      transcription 
+    });
+  } catch (error) {
+    console.error('Voice transcription error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to transcribe audio' 
+    });
+  }
+});
+
+// AI service endpoint
+app.post('/api/ai/process', authenticateApiKey, async (req, res) => {
+  try {
+    const { message, context, customerInfo } = req.body;
+    
+    if (!message) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Message is required' 
+      });
+    }
+    
+    const response = await aiService.processCustomerMessage(message, context, customerInfo);
+    
+    res.json({ 
+      success: true, 
+      response 
+    });
+  } catch (error) {
+    console.error('AI processing error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to process message with AI' 
+    });
   }
 });
 

@@ -339,4 +339,4 @@ Please respond appropriately and determine if any admin approval is needed.`;
   }
 }
 
-module.exports = new AIService();
+module.exports = AIService;
