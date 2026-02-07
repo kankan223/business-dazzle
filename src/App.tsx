@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { getTimeAgo } from '@/hooks/use-time-ago';
 import { SidebarItem } from '@/components/sidebar-item';
 import { apiService, type Bot, type Conversation, type Approval, type Stats } from '@/services/api';
@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { VoiceInput } from './components/VoiceInput';
 import { DirectCommand } from './components/DirectCommand';
+import { DebugPanel } from './components/DebugPanel';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -29,7 +30,6 @@ import { toast } from 'sonner';
 import { Toaster } from '@/components/ui/sonner';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import './App.css';
-import { useRef } from 'react';
 
 // ==================== MAIN COMPONENT ====================
 
@@ -49,6 +49,7 @@ function App() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [orders, setOrders] = useState<any[]>([]);
   const [inventory, setInventory] = useState<any[]>([]);
+  const [users, setUsers] = useState<any[]>([]);
   const [activityData, setActivityData] = useState<any>(null);
   const [lowStockWarnings, setLowStockWarnings] = useState<any[]>([]);
 
@@ -150,6 +151,7 @@ function App() {
   const [showOrderDialog, setShowOrderDialog] = useState(false);
   const [showProductDialog, setShowProductDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
+  const [newBotPlatform, setNewBotPlatform] = useState<'whatsapp' | 'telegram'>('whatsapp');
   const [editingItem, setEditingItem] = useState<any>(null);
   const [productForm, setProductForm] = useState({
     name: '',
@@ -179,23 +181,29 @@ function App() {
         await apiService.initializeWebSocket();
         
         // Fetch initial data
-        const [botsData, approvalsData, conversationsData, statsData, securityLogsData, inventoryData, activityData] = await Promise.all([
-          apiService.getBots(),
-          apiService.getApprovals(),
-          apiService.getConversations(),
-          apiService.getStats(),
-          apiService.getSecurityLogs(),
-          apiService.getInventory(),
-          apiService.getActivity('24h')
-        ]);
-        
-        setBots(botsData);
-        setApprovals(approvalsData);
-        setConversations(conversationsData);
-        setStats(statsData);
-        setSecurityLogs(securityLogsData);
-        setInventory(inventoryData);
-        setActivityData(activityData);
+        const fetchData = async () => {
+          try {
+            const [botsData, approvalsData, conversationsData, ordersData, inventoryData, usersData] = await Promise.all([
+              apiService.getBots(),
+              apiService.getApprovals(),
+              apiService.getConversations(),
+              apiService.getOrders(),
+              apiService.getInventory(),
+              apiService.getUsers()
+            ]);
+            
+            setBots(botsData);
+            setApprovals(approvalsData);
+            setConversations(conversationsData);
+            setOrders(ordersData);
+            setInventory(inventoryData);
+            setUsers(usersData);
+          } catch (error) {
+            console.error('Failed to fetch initial data:', error);
+            toast.error('Failed to load data');
+          }
+        };
+        fetchData();
         
       } catch (error) {
         console.error('Failed to initialize app:', error);
@@ -310,8 +318,18 @@ function App() {
     });
     
     apiService.onNewMessage((data: any) => {
-      setApprovals(prev => [data, ...prev]);
-      toast.info('New approval request received');
+      console.log('New message received:', data);
+      
+      // Update conversations if message belongs to a conversation
+      if (data.conversationId) {
+        setConversations(prev => prev.map(conv => 
+          conv.id === data.conversationId ? { 
+            ...conv, 
+            lastMessageAt: data.timestamp,
+            messages: [...conv.messages, data]
+          } : conv
+        ));
+      }
     });
     
     return () => {
@@ -482,6 +500,39 @@ function App() {
     }
   }, [editingItem, productForm]);
 
+  const handleDeleteUser = useCallback(async (userId: string) => {
+    if (!confirm('Are you sure you want to delete this user and all their associated records?')) {
+      return;
+    }
+    
+    try {
+      await apiService.deleteUser(userId);
+      setUsers(prev => prev.filter(user => user.id !== userId));
+      toast.success('User deleted successfully');
+    } catch (error) {
+      console.error('Error deleting user:', error);
+      toast.error('Failed to delete user');
+    }
+  }, []);
+
+  // Database management functions
+  const resetDatabase = useCallback(async () => {
+    try {
+      toast.loading('Resetting database...', { id: 'reset-db' });
+      
+      const result = await apiService.resetDatabase('RESET_DATABASE_CONFIRMED');
+      
+      toast.success(`Database reset successfully! Deleted ${result.totalDeleted} records`, { id: 'reset-db' });
+      
+      // Refresh all data
+      window.location.reload();
+      
+    } catch (error) {
+      console.error('Failed to reset database:', error);
+      toast.error('Failed to reset database. Check console for details.', { id: 'reset-db' });
+    }
+  }, []);
+
   const handleDeleteProduct = useCallback(async (itemId: string, itemName: string) => {
     try {
       await apiService.deleteInventoryItem(itemId);
@@ -622,7 +673,9 @@ function App() {
             <SidebarItem id="conversations" icon={MessageSquare} label="Conversations" badge={conversations.length} activeTab={activeTab} navigate={navigate} />
             <SidebarItem id="commands" icon={Send} label="Commands" activeTab={activeTab} navigate={navigate} />
             <SidebarItem id="orders" icon={FileText} label="Orders" badge={approvals.filter(a => a.status === 'pending').length} activeTab={activeTab} navigate={navigate} />
+            <SidebarItem id="users" icon={Database} label="Users" activeTab={activeTab} navigate={navigate} />
             <SidebarItem id="inventory" icon={Package} label="Inventory" activeTab={activeTab} navigate={navigate} />
+            <SidebarItem id="debug" icon={Eye} label="Debug" activeTab={activeTab} navigate={navigate} />
             <SidebarItem id="security" icon={Shield} label="Security & Privacy" activeTab={activeTab} navigate={navigate} />
             <SidebarItem id="settings" icon={Settings} label="Settings" activeTab={activeTab} navigate={navigate} />
           </nav>
@@ -664,6 +717,7 @@ function App() {
           <SidebarItem id="conversations" icon={MessageSquare} label="Conversations" badge={conversations.length} activeTab={activeTab} navigate={navigate} />
           <SidebarItem id="commands" icon={Send} label="Commands" activeTab={activeTab} navigate={navigate} />
           <SidebarItem id="orders" icon={FileText} label="Orders" badge={approvals.filter(a => a.status === 'pending').length} activeTab={activeTab} navigate={navigate} />
+          <SidebarItem id="users" icon={Database} label="Users" activeTab={activeTab} navigate={navigate} />
           <SidebarItem id="inventory" icon={Package} label="Inventory" activeTab={activeTab} navigate={navigate} />
           <SidebarItem id="security" icon={Shield} label="Security & Privacy" activeTab={activeTab} navigate={navigate} />
           <SidebarItem id="settings" icon={Settings} label="Settings" activeTab={activeTab} navigate={navigate} />
@@ -691,14 +745,28 @@ function App() {
               <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
               <span className="text-xs font-medium text-green-700">All Systems Operational</span>
             </div>
-            <Button variant="ghost" size="icon" onClick={toggleDarkMode} className="relative">
+            <Button 
+              variant="ghost" 
+              size="icon" 
+              onClick={toggleDarkMode} 
+              className="relative"
+              aria-label={`Switch to ${darkMode ? 'light' : 'dark'} mode`}
+              title={`Switch to ${darkMode ? 'light' : 'dark'} mode`}
+            >
               {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
             </Button>
-            <Button variant="ghost" size="icon" className="relative" onClick={() => navigate('approvals')}>
+            <Button 
+              variant="ghost" 
+              size="icon" 
+              className="relative" 
+              onClick={() => navigate('approvals')}
+              aria-label={`View approvals ${approvals.filter(a => a.status === 'pending').length > 0 ? `(${approvals.filter(a => a.status === 'pending').length} pending)` : ''}`}
+              title="View approvals"
+            >
               <Bell className="w-5 h-5" />
-              {stats?.pendingApprovals && stats.pendingApprovals > 0 && (
+              {approvals.filter(a => a.status === 'pending').length > 0 && (
                 <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
-                  {stats.pendingApprovals}
+                  {approvals.filter(a => a.status === 'pending').length}
                 </span>
               )}
             </Button>
@@ -1269,8 +1337,13 @@ function App() {
                               <TableCell className="font-medium">{order.id}</TableCell>
                               <TableCell>
                                 <div>
-                                  <p>{order.customerName}</p>
-                                  <p className="text-xs text-muted-foreground">{order.customerPhone}</p>
+                                  <p>{order.userInfo?.name || order.customerName}</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {order.userInfo?.username ? `@${order.userInfo.username}` : order.customerPhone}
+                                  </p>
+                                  {order.userInfo && (
+                                    <p className="text-xs text-blue-600">Telegram User</p>
+                                  )}
                                 </div>
                               </TableCell>
                               <TableCell>{order.items.length} items</TableCell>
@@ -1293,6 +1366,60 @@ function App() {
                               <TableCell className="text-right">
                                 <Button variant="ghost" size="sm" onClick={() => toast.info(`Order ${order.id} details`)}>
                                   <Eye className="w-4 h-4" />
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </CardContent>
+                  </Card>
+                </div>
+              )}
+
+              {/* USERS */}
+              {activeTab === 'users' && (
+                <div className="space-y-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h2 className="text-2xl font-bold">User Management</h2>
+                      <p className="text-muted-foreground">Manage registered users</p>
+                    </div>
+                  </div>
+
+                  <Card>
+                    <CardContent className="p-0">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Name</TableHead>
+                            <TableHead>Username</TableHead>
+                            <TableHead>Platform</TableHead>
+                            <TableHead>Telegram ID</TableHead>
+                            <TableHead>Registered</TableHead>
+                            <TableHead className="text-right">Actions</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {users.map((user) => (
+                            <TableRow key={user.id}>
+                              <TableCell className="font-medium">{user.name}</TableCell>
+                              <TableCell>{user.username || '-'}</TableCell>
+                              <TableCell>
+                                <Badge variant="outline" className="capitalize">
+                                  {user.platform || 'telegram'}
+                                </Badge>
+                              </TableCell>
+                              <TableCell className="font-mono text-sm">{user.telegramId}</TableCell>
+                              <TableCell>{new Date(user.createdAt).toLocaleDateString()}</TableCell>
+                              <TableCell className="text-right">
+                                <Button 
+                                  variant="ghost" 
+                                  size="sm" 
+                                  onClick={() => handleDeleteUser(user.id)}
+                                  className="text-red-600 hover:text-red-700"
+                                >
+                                  <Trash2 className="w-4 h-4" />
                                 </Button>
                               </TableCell>
                             </TableRow>
@@ -1714,8 +1841,74 @@ function App() {
                         </div>
                       </CardContent>
                     </Card>
+
+                    {/* Database Management */}
+                    <Card className="border-red-200">
+                      <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                          <Database className="w-5 h-5 text-red-600" />
+                          Database Management
+                        </CardTitle>
+                        <CardDescription className="text-red-600">
+                          ⚠️ Destructive operations - Use with caution
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        <div className="bg-muted p-4 rounded-lg">
+                          <h4 className="font-medium mb-2">Database Statistics</h4>
+                          <div className="grid grid-cols-2 gap-2 text-sm">
+                            <div>Users: <span className="font-mono">{users.length}</span></div>
+                            <div>Orders: <span className="font-mono">{orders.length}</span></div>
+                            <div>Conversations: <span className="font-mono">{conversations.length}</span></div>
+                            <div>Approvals: <span className="font-mono">{approvals.length}</span></div>
+                          </div>
+                        </div>
+                        
+                        <div className="space-y-2">
+                          <Button 
+                            variant="outline" 
+                            className="w-full"
+                            onClick={async () => {
+                              try {
+                                const info = await apiService.getDatabaseInfo();
+                                toast.success(`Total records: ${info.totalRecords}`);
+                              } catch (error) {
+                                toast.error('Failed to get database info');
+                              }
+                            }}
+                          >
+                            <Database className="w-4 h-4 mr-2" />
+                            Refresh Database Info
+                          </Button>
+                          
+                          <Button 
+                            variant="destructive" 
+                            className="w-full"
+                            onClick={() => {
+                              if (confirm('⚠️ WARNING: This will delete ALL data including users, orders, conversations, and everything else. This action cannot be undone.\n\nType "RESET_DATABASE_CONFIRMED" to proceed.')) {
+                                const confirmation = prompt('Please type "RESET_DATABASE_CONFIRMED" to confirm:');
+                                if (confirmation === 'RESET_DATABASE_CONFIRMED') {
+                                  // Double confirmation
+                                  if (confirm('🔥 FINAL WARNING: This will permanently delete all data. Are you absolutely sure?')) {
+                                    resetDatabase();
+                                  }
+                                }
+                              }
+                            }}
+                          >
+                            <Trash2 className="w-4 h-4 mr-2" />
+                            Reset Entire Database
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
                   </div>
                 </div>
+              )}
+
+              {/* DEBUG */}
+              {activeTab === 'debug' && (
+                <DebugPanel />
               )}
 
             </div>
@@ -1858,7 +2051,7 @@ function App() {
             </div>
             <div>
               <label className="text-sm font-medium">Platform</label>
-              <Select defaultValue="whatsapp">
+              <Select value={newBotPlatform} onValueChange={(value: 'whatsapp' | 'telegram') => setNewBotPlatform(value)}>
                 <SelectTrigger className="mt-1">
                   <SelectValue />
                 </SelectTrigger>
@@ -1886,16 +2079,16 @@ function App() {
               setBots(prev => [...prev, {
                 botId: `bot-${Date.now()}`,
                 id: `bot-${Date.now()}`,
-                name: 'New WhatsApp Bot',
-                platform: 'whatsapp',
+                name: `New ${newBotPlatform === 'whatsapp' ? 'WhatsApp' : 'Telegram'} Bot`,
+                platform: newBotPlatform,
                 status: 'connecting',
                 connectedCustomers: 0,
                 totalMessages: 0,
                 capabilities: ['text', 'image', 'document'],
                 createdAt: new Date().toISOString(),
                 lastActive: new Date().toISOString(),
-                phoneNumber: '+1234567890',
-                apiKey: 'whatsapp-api-key',
+                phoneNumber: newBotPlatform === 'whatsapp' ? '+1234567890' : undefined,
+                apiKey: newBotPlatform === 'whatsapp' ? 'whatsapp-api-key' : 'telegram-bot-token',
                 pendingApprovals: 0,
                 lastActivity: new Date().toISOString(),
                 encryptionEnabled: true,
@@ -1904,6 +2097,7 @@ function App() {
               }]);
               toast.success('Bot added successfully'); 
               setShowAddBotDialog(false);
+              setNewBotPlatform('whatsapp'); // Reset to default
             }}>
               <Plus className="w-4 h-4 mr-1" />
               Add Bot

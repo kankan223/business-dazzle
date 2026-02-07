@@ -19,10 +19,12 @@ const COLLECTIONS = {
   APPROVALS: 'approvals',
   ORDERS: 'orders',
   CUSTOMERS: 'customers',
+  USERS: 'users',
   AUDIT_LOGS: 'audit_logs',
   AI_RESPONSES: 'ai_responses',
   SYSTEM_CONFIG: 'system_config',
-  INVENTORY: 'inventory'
+  INVENTORY: 'inventory',
+  INVOICES: 'invoices'
 };
 
 // Connect to MongoDB
@@ -452,6 +454,32 @@ const ApprovalOperations = {
     );
   },
 
+  // Get approval by ID
+  async getById(id) {
+    return await db.collection(COLLECTIONS.APPROVALS).findOne({ id });
+  },
+
+  // Get approval by user ID
+  async getByUser(userId) {
+    return await db.collection(COLLECTIONS.APPROVALS)
+      .find({ customerId: userId })
+      .sort({ requestedAt: -1 })
+      .toArray();
+  },
+
+  // Update approval (full update)
+  async update(id, updateData) {
+    return await db.collection(COLLECTIONS.APPROVALS).updateOne(
+      { id },
+      { $set: updateData }
+    );
+  },
+
+  // Delete approval
+  async delete(id) {
+    return await db.collection(COLLECTIONS.APPROVALS).deleteOne({ id });
+  },
+
   // Get approvals by date range
   async getByDateRange(startDate, endDate = new Date()) {
     return await db.collection(COLLECTIONS.APPROVALS)
@@ -631,6 +659,21 @@ const OrderOperations = {
       .sort({ createdAt: -1 })
       .toArray();
   },
+
+  // Get recent orders (for proactive intelligence)
+  async getRecent(days = 30) {
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+    
+    return await db.collection(COLLECTIONS.ORDERS)
+      .find({
+        createdAt: {
+          $gte: startDate
+        }
+      })
+      .sort({ createdAt: -1 })
+      .toArray();
+  },
   
   // Create new order
   async create(order) {
@@ -765,6 +808,142 @@ const OrderOperations = {
   }
 };
 
+const UserOperations = {
+  // Get all users
+  async getAll() {
+    return await db.collection(COLLECTIONS.USERS)
+      .find({})
+      .sort({ createdAt: -1 })
+      .toArray();
+  },
+
+  // Get user by Telegram ID
+  async getByTelegramId(telegramId) {
+    return await db.collection(COLLECTIONS.USERS).findOne({ telegramId });
+  },
+
+  // Get user by ID
+  async getById(userId) {
+    return await db.collection(COLLECTIONS.USERS).findOne({ id: userId });
+  },
+
+  // Create or update user
+  async upsert(user) {
+    const { telegramId } = user;
+    const existingUser = await this.getByTelegramId(telegramId);
+    
+    if (existingUser) {
+      // Update existing user
+      const updateData = {
+        ...user,
+        updatedAt: new Date().toISOString()
+      };
+      
+      await db.collection(COLLECTIONS.USERS).updateOne(
+        { telegramId },
+        { $set: updateData }
+      );
+      
+      return { ...existingUser, ...updateData };
+    } else {
+      // Create new user
+      const newUser = {
+        id: `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        ...user,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      
+      await db.collection(COLLECTIONS.USERS).insertOne(newUser);
+      return newUser;
+    }
+  },
+
+  // Delete user and associated records
+  async delete(userId) {
+    try {
+      // Delete user
+      const userResult = await db.collection(COLLECTIONS.USERS).deleteOne({ id: userId });
+      
+      // Delete associated conversations
+      await db.collection(COLLECTIONS.CONVERSATIONS).deleteMany({ customerId: userId });
+      
+      // Delete associated orders
+      await db.collection(COLLECTIONS.ORDERS).deleteMany({ customerId: userId });
+      
+      // Delete associated approvals
+      await db.collection(COLLECTIONS.APPROVALS).deleteMany({ customerId: userId });
+      
+      return userResult.deletedCount > 0;
+    } catch (error) {
+      console.error('Error deleting user:', error);
+      throw error;
+    }
+  }
+};
+
+// Invoice Operations
+const InvoiceOperations = {
+  async create(invoiceData) {
+    try {
+      const db = getDatabase();
+      const newInvoice = {
+        id: `inv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        ...invoiceData,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+      
+      const result = await db.collection(COLLECTIONS.INVOICES).insertOne(newInvoice);
+      return result;
+    } catch (error) {
+      console.error('Error creating invoice:', error);
+      throw error;
+    }
+  },
+
+  async getById(invoiceId) {
+    try {
+      const db = getDatabase();
+      const invoice = await db.collection(COLLECTIONS.INVOICES).findOne({ id: invoiceId });
+      return invoice;
+    } catch (error) {
+      console.error('Error getting invoice:', error);
+      throw error;
+    }
+  },
+
+  async getByCustomerId(customerId) {
+    try {
+      const db = getDatabase();
+      const invoices = await db.collection(COLLECTIONS.INVOICES).find({ customerId }).toArray();
+      return invoices;
+    } catch (error) {
+      console.error('Error getting invoices by customer:', error);
+      throw error;
+    }
+  },
+
+  async updateStatus(invoiceId, status) {
+    try {
+      const db = getDatabase();
+      const result = await db.collection(COLLECTIONS.INVOICES).updateOne(
+        { id: invoiceId },
+        { 
+          $set: { 
+            status: status,
+            updatedAt: new Date()
+          } 
+        }
+      );
+      return result;
+    } catch (error) {
+      console.error('Error updating invoice status:', error);
+      throw error;
+    }
+  }
+};
+
 module.exports = {
   connectDatabase,
   getDatabase,
@@ -773,8 +952,10 @@ module.exports = {
   ConversationOperations,
   ApprovalOperations,
   CustomerOperations,
+  UserOperations,
   AuditOperations,
   InventoryOperations,
   OrderOperations,
+  InvoiceOperations,
   COLLECTIONS
 };

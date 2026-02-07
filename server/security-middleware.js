@@ -85,6 +85,12 @@ const schemas = {
     sendVia: Joi.array().items(Joi.string().valid('telegram', 'email', 'web', 'all')).default(['all'])
   }),
 
+  botCommand: Joi.object({
+    command: Joi.string().required().max(1000),
+    platform: Joi.string().valid('web', 'telegram', 'whatsapp').default('web'),
+    userId: Joi.string().optional()
+  }),
+
   orderStatus: Joi.object({
     status: Joi.string().valid('pending', 'approved', 'processing', 'shipped', 'delivered', 'cancelled').required(),
     notes: Joi.string().max(500).optional()

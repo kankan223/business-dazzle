@@ -59,7 +59,7 @@ cleanup_processes() {
     pkill -f "bot.*8336544391" 2>/dev/null
     
     # Kill processes on our ports
-    kill_port 3002 "Backend Server"
+    kill_port 3003 "Backend Server"
     kill_port 5173 "Frontend Dev Server"
     kill_port 27017 "MongoDB (if running locally)"
     
@@ -68,7 +68,7 @@ cleanup_processes() {
     sleep 2
     
     # Check and kill any remaining processes on ports
-    for port in 3002 5173; do
+    for port in 3003 5173; do
         local pids=$(lsof -ti:$port 2>/dev/null)
         if [ ! -z "$pids" ]; then
             echo -e "${RED}⚠️  Force killing port $port processes: $pids${NC}"
@@ -117,10 +117,10 @@ start_all() {
         exit 1
     fi
     
-    # Kill any existing processes on port 3002
-    if lsof -ti:3002 >/dev/null 2>&1; then
-        echo -e "${YELLOW}⚠️  Port 3002 in use, cleaning up...${NC}"
-        lsof -ti:3002 | xargs kill -9 2>/dev/null
+    # Kill any existing processes on port 3003
+    if lsof -ti:3003 >/dev/null 2>&1; then
+        echo -e "${YELLOW}⚠️  Port 3003 in use, cleaning up...${NC}"
+        lsof -ti:3003 | xargs kill -9 2>/dev/null
         sleep 2
     fi
     
@@ -135,8 +135,8 @@ start_all() {
     sleep 8
     
     # Check if backend is running
-    if curl -s http://localhost:3002/health >/dev/null 2>&1; then
-        echo -e "${GREEN}✅ Backend is running on http://localhost:3002${NC}"
+    if curl -s http://localhost:3003/health >/dev/null 2>&1; then
+        echo -e "${GREEN}✅ Backend is running on http://localhost:3003${NC}"
     else
         echo -e "${YELLOW}⚠️  Backend starting but health check failed${NC}"
         echo -e "${YELLOW}This is normal during startup. Check server.log for status.${NC}"
@@ -193,8 +193,8 @@ start_all() {
     echo ""
     echo -e "${BLUE}🌐 Access URLs:${NC}"
     echo -e "${BLUE}   Frontend: http://localhost:5173${NC}"
-    echo -e "${BLUE}   Backend:  http://localhost:3002${NC}"
-    echo -e "${BLUE}   Health:   http://localhost:3002/health${NC}"
+    echo -e "${BLUE}   Backend:  http://localhost:3003${NC}"
+    echo -e "${BLUE}   Health:   http://localhost:3003/health${NC}"
 }
 
 # Function to show status
@@ -203,8 +203,8 @@ show_status() {
     echo "=================="
     
     # Check backend
-    if curl -s http://localhost:3002/health >/dev/null 2>&1; then
-        echo -e "${GREEN}✅ Backend: RUNNING (http://localhost:3002)${NC}"
+    if curl -s http://localhost:3003/health >/dev/null 2>&1; then
+        echo -e "${GREEN}✅ Backend: RUNNING (http://localhost:3003)${NC}"
     else
         echo -e "${RED}❌ Backend: STOPPED${NC}"
     fi
@@ -219,7 +219,7 @@ show_status() {
     # Show processes on our ports
     echo ""
     echo -e "${BLUE}🔍 Port Usage:${NC}"
-    for port in 3002 5173 27017; do
+    for port in 3003 5173 27017; do
         local pids=$(lsof -ti:$port 2>/dev/null)
         if [ ! -z "$pids" ]; then
             echo -e "${YELLOW}⚠️  Port $port: $pids${NC}"
@@ -264,10 +264,10 @@ stop_all() {
     echo -e "${BLUE}🔧 Stopping backend...${NC}"
     pkill -f "node index.js" 2>/dev/null
     pkill -f "npm start" 2>/dev/null
-    lsof -ti:3002 | xargs kill -9 2>/dev/null
+    lsof -ti:3003 | xargs kill -9 2>/dev/null
     
     # Kill ports
-    kill_port 3002 "Backend"
+    kill_port 3003 "Backend"
     kill_port 5173 "Frontend"
     
     # Wait for processes to fully terminate
@@ -275,9 +275,9 @@ stop_all() {
     
     # Verify cleanup
     echo -e "${BLUE}🔍 Verifying cleanup...${NC}"
-    if lsof -ti:3002 >/dev/null 2>&1; then
-        echo -e "${RED}⚠️  Port 3002 still in use, force killing...${NC}"
-        lsof -ti:3002 | xargs kill -9 2>/dev/null
+    if lsof -ti:3003 >/dev/null 2>&1; then
+        echo -e "${RED}⚠️  Port 3003 still in use, force killing...${NC}"
+        lsof -ti:3003 | xargs kill -9 2>/dev/null
     fi
     
     if lsof -ti:5173 >/dev/null 2>&1; then

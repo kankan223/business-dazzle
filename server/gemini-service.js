@@ -13,105 +13,284 @@ class GeminiAIService {
       console.warn('⚠️ GEMINI_API_KEY not configured. AI features will be limited.');
     }
     
+    // Model fallback priority
+    this.MODEL_PRIORITY = [
+      'gemini-1.5-flash',
+      'gemini-1.5-pro',
+      'gemini-1.0-pro'
+    ];
+    
+    // Use stable model only
     this.genAI = this.apiKey ? new GoogleGenerativeAI(this.apiKey) : null;
-    this.model = this.genAI ? this.genAI.getGenerativeModel({ model: 'gemini-2.5-pro' }) : null;
+    this.model = null;
+    this.currentModelIndex = 0;
+    
+    // Initialize with fallback strategy
+    this.initializeModelWithFallback();
+    
+    // Retry configuration
+    this.retryConfig = {
+      maxRetries: 3,
+      baseDelay: 1000,
+      maxDelay: 5000
+    };
     
     // AI configuration
     this.config = {
-      temperature: 0.7,
-      maxOutputTokens: 1000,
-      systemPrompt: `You are Bharat Biz-Agent, an intelligent business assistant for Indian businesses. 
-      
-Your capabilities:
-- Handle customer inquiries about products, services, and orders
-- Process orders and payments with appropriate approvals
-- Provide inventory information
-- Assist with customer support issues
-- Make recommendations for business improvements
-- Support multiple Indian languages
+      systemPrompt: `You are Bharat Biz-Agent, an AI assistant for Indian businesses.
 
-Business Context:
-- You work for Indian businesses with typical products like rice, wheat, sugar, cooking oil, spices
-- Standard pricing: Rice ₹35/kg, Wheat ₹28/kg, Sugar ₹42/kg, Cooking Oil ₹180/litre
-- GST rate is 18% for most products
-- Business hours: 9 AM to 8 PM, Monday to Saturday
-- Delivery available within city limits (₹20-₹50 based on distance)
+CRITICAL: Always respond with valid JSON only. No extra text.
 
-Privacy and Security Rules:
-- Never share sensitive customer information without explicit admin approval
-- Always ask for admin approval for:
-  * Refunds over ₹1000
-  * Large order modifications
-  * Sharing customer data
-  * Accessing sensitive business information
-- Log all actions that require approval
-- Detect and flag potential security threats
+JSON Structure:
+{
+  "intent": "create_order|generate_invoice|payment_reminder|check_inventory|general_query",
+  "entities": {
+    "products": ["product names"],
+    "amounts": [numbers],
+    "people": ["names"],
+    "quantities": [numbers]
+  },
+  "language": "en|hi|hinglish",
+  "confidence": 0.0-1.0,
+  "requiresApproval": true|false,
+  "proposedAction": "specific action to take"
+}
+
+Business Rules:
+- Orders over ₹1000 require approval
+- Refunds always require approval  
+- Data exports require approval
+- GST is 18% for most products
+- Standard prices: Rice ₹35/kg, Wheat ₹28/kg, Sugar ₹42/kg, Oil ₹180/L
 
 Language Support:
-- English: Standard business communication
-- Hindi: हिन्दी में जवाब दें
-- Hinglish: Mix of Hindi and English words
-- Regional languages: Kannada, Tamil, Telugu, Bengali, Marathi, Gujarati, Punjabi, Malayalam
+- English: Standard business
+- Hindi: हिन्दी में बात करें
+- Hinglish: Mix like "bana do", "kal bhej dena"
 
-Response Style:
-- Professional but friendly
-- Culturally appropriate for Indian customers
-- Include relevant business information
-- Always suggest next steps
-- Ask clarifying questions when needed
-- Use appropriate currency format (₹)
-- Consider Indian business hours and festivals
+If confidence < 0.6, set requiresApproval: true and proposedAction: "ask_clarification".
 
-Product Information:
-- Rice: ₹35/kg, Available in 5kg, 10kg, 25kg packs
-- Wheat: ₹28/kg, Available in 5kg, 10kg packs  
-- Sugar: ₹42/kg, Available in 1kg, 5kg packs
-- Cooking Oil: ₹180/litre, Available in 1L, 5L cans
-- Turmeric Powder: ₹120/kg, Available in 100g, 500g packs
-- Red Chilli Powder: ₹85/kg, Available in 100g, 500g packs
-
-Common Customer Queries:
-- Price checks: "What is the price of [product]?"
-- Stock availability: "Is [product] available?"
-- Order placement: "I want to order [quantity] [product]"
-- Delivery: "When can you deliver?"
-- Payment: "What payment methods do you accept?"
-- Refunds: "How do I return [product]?"
-
-Always provide helpful, accurate information and guide customers appropriately.`
+Respond with JSON only.`
     };
   }
 
-  // Process customer message and generate response
-  async processCustomerMessage(message, customerContext, conversationHistory) {
-    try {
-      if (!this.model) {
-        return this.getFallbackResponse(message);
-      }
-
-      const prompt = this.buildCustomerPrompt(message, customerContext, conversationHistory);
-      
-      const result = await this.model.generateContent([
-        this.config.systemPrompt,
-        prompt
-      ]);
-
-      const aiResponse = result.response.text();
-      
-      // Analyze if admin approval is needed
-      const approvalNeeded = this.analyzeApprovalNeed(message, aiResponse);
-      
-      return {
-        response: aiResponse,
-        approvalNeeded,
-        confidence: 0.85, // Gemini is generally reliable
-        suggestedActions: this.extractActions(aiResponse),
-        language: this.detectLanguage(message)
-      };
-    } catch (error) {
-      console.error('AI processing error:', error);
-      return this.getFallbackResponse(message);
+  // Initialize model with fallback strategy
+  async initializeModelWithFallback() {
+    if (!this.genAI) {
+      console.warn('⚠️ No Gemini API key available, using fallback mode');
+      return;
     }
+
+    for (let i = 0; i < this.MODEL_PRIORITY.length; i++) {
+      try {
+        const modelName = this.MODEL_PRIORITY[i];
+        console.log(`🤖 Trying model: ${modelName}`);
+        
+        this.model = this.genAI.getGenerativeModel({ 
+          model: modelName,
+          generationConfig: {
+            temperature: 0.3, // Lower for consistency
+            maxOutputTokens: 800,
+            candidateCount: 1
+          }
+        });
+        
+        // Test the model with a simple request
+        await this.model.generateContent('test');
+        
+        this.currentModelIndex = i;
+        console.log(`✅ Successfully initialized model: ${modelName}`);
+        return;
+        
+      } catch (error) {
+        console.warn(`❌ Model ${this.MODEL_PRIORITY[i]} failed:`, error.message);
+        continue;
+      }
+    }
+    
+    console.error('🚫 All Gemini models failed, using fallback mode');
+    this.model = null;
+  }
+
+  // Get available model with fallback
+  async getAvailableModel() {
+    if (!this.genAI) {
+      throw new Error('No Gemini API available');
+    }
+
+    // Try current model first
+    if (this.model) {
+      try {
+        await this.model.generateContent('test');
+        return this.model;
+      } catch (error) {
+        console.warn(`Current model failed, trying fallback:`, error.message);
+      }
+    }
+
+    // Try all models from current position
+    for (let i = this.currentModelIndex; i < this.MODEL_PRIORITY.length; i++) {
+      try {
+        const modelName = this.MODEL_PRIORITY[i];
+        console.log(`🔄 Switching to model: ${modelName}`);
+        
+        this.model = this.genAI.getGenerativeModel({ 
+          model: modelName,
+          generationConfig: {
+            temperature: 0.3,
+            maxOutputTokens: 800,
+            candidateCount: 1
+          }
+        });
+        
+        await this.model.generateContent('test');
+        this.currentModelIndex = i;
+        console.log(`✅ Switched to model: ${modelName}`);
+        return this.model;
+        
+      } catch (error) {
+        console.warn(`❌ Model ${modelName} failed:`, error.message);
+        continue;
+      }
+    }
+    
+    throw new Error('No valid Gemini model available');
+  }
+
+  // Retry logic with exponential backoff
+  async retryWithBackoff(operation, context = '') {
+    for (let attempt = 1; attempt <= this.retryConfig.maxRetries; attempt++) {
+      try {
+        return await operation();
+      } catch (error) {
+        console.warn(`AI operation attempt ${attempt} failed:`, error.message);
+        
+        if (attempt === this.retryConfig.maxRetries) {
+          throw new Error(`AI operation failed after ${this.retryConfig.maxRetries} attempts: ${error.message}`);
+        }
+        
+        const delay = Math.min(
+          this.retryConfig.baseDelay * Math.pow(2, attempt - 1),
+          this.retryConfig.maxDelay
+        );
+        
+        console.log(`Retrying in ${delay}ms... (attempt ${attempt}/${this.retryConfig.maxRetries})`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+
+  // Process customer message and generate structured response
+  async processCustomerMessage(message, customerContext, conversationHistory) {
+    return await this.retryWithBackoff(async () => {
+      try {
+        // Get available model with fallback
+        let model;
+        try {
+          model = await this.getAvailableModel();
+        } catch (error) {
+          console.warn('AI models unavailable, using fallback:', error.message);
+          return this.getFallbackStructuredResponse(message);
+        }
+
+        const prompt = `${this.config.systemPrompt}
+
+Customer Message: "${message}"
+Context: ${JSON.stringify(customerContext || {})}
+History: ${JSON.stringify((conversationHistory || []).slice(-3))}
+
+Respond with JSON only.`;
+
+        const result = await model.generateContent(prompt);
+        const responseText = result.response.text().trim();
+        
+        // Parse JSON response
+        let structuredResponse;
+        try {
+          // Extract JSON from response (handle potential extra text)
+          const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            structuredResponse = JSON.parse(jsonMatch[0]);
+          } else {
+            structuredResponse = JSON.parse(responseText);
+          }
+        } catch (parseError) {
+          console.error('Failed to parse AI JSON response:', parseError.message);
+          console.error('Raw response:', responseText);
+          return this.getFallbackStructuredResponse(message);
+        }
+
+        // Validate required fields
+        const validatedResponse = this.validateStructuredResponse(structuredResponse, message);
+        
+        return validatedResponse;
+
+      } catch (error) {
+        console.error('AI processing error:', error);
+        
+        // If it's a model error, try to reinitialize
+        if (error.message.includes('model') || error.message.includes('API')) {
+          console.log('🔄 Reinitializing AI models due to error...');
+          await this.initializeModelWithFallback();
+        }
+        
+        return this.getFallbackStructuredResponse(message);
+      }
+    }, 'processCustomerMessage');
+  }
+
+  // Validate structured response has required fields
+  validateStructuredResponse(response, originalMessage) {
+    const defaults = {
+      intent: 'general_query',
+      entities: { products: [], amounts: [], people: [], quantities: [] },
+      language: 'en',
+      confidence: 0.5,
+      requiresApproval: false,
+      proposedAction: 'respond_to_query'
+    };
+
+    // Merge with defaults for missing fields
+    const validated = {
+      ...defaults,
+      ...response
+    };
+
+    // Ensure confidence is within bounds
+    if (typeof validated.confidence !== 'number' || validated.confidence < 0 || validated.confidence > 1) {
+      validated.confidence = 0.5;
+    }
+
+    // Auto-require approval for certain conditions
+    if (validated.confidence < 0.6) {
+      validated.requiresApproval = true;
+      validated.proposedAction = 'ask_clarification';
+    }
+
+    // Check for high-value operations
+    const hasHighAmount = validated.entities.amounts?.some(amount => amount > 1000);
+    const isRefundIntent = validated.intent === 'refund' || validated.proposedAction?.includes('refund');
+    const isDataExport = validated.intent === 'data_export' || validated.proposedAction?.includes('export');
+
+    if (hasHighAmount || isRefundIntent || isDataExport) {
+      validated.requiresApproval = true;
+    }
+
+    return validated;
+  }
+
+  // Fallback structured response when AI fails
+  getFallbackStructuredResponse(message) {
+    const language = this.detectLanguage(message);
+    
+    return {
+      intent: 'general_query',
+      entities: { products: [], amounts: [], people: [], quantities: [] },
+      language: language,
+      confidence: 0.3,
+      requiresApproval: false,
+      proposedAction: 'human_assistance_needed'
+    };
   }
 
   // Generate business recommendations for admin

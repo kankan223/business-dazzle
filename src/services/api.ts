@@ -6,8 +6,8 @@
 import { io, Socket } from 'socket.io-client';
 
 // API configuration
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
-const WS_URL = import.meta.env.VITE_WS_URL || 'http://localhost:3001';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3003';
+const WS_URL = import.meta.env.VITE_WS_URL || 'http://localhost:3003';
 const ADMIN_API_KEY = import.meta.env.VITE_ADMIN_API_KEY;
 
 // Validate required environment variables
@@ -580,6 +580,53 @@ export class ApiService {
     if (!response.ok) throw new Error('Failed to check low stock');
     const result = await response.json();
     return result.data;
+  }
+
+  // Users API methods
+  async getUsers(): Promise<any[]> {
+    const response = await fetch(`${API_BASE_URL}/api/users`, {
+      headers: {
+        'Authorization': `Bearer ${ADMIN_API_KEY}`
+      }
+    });
+    if (!response.ok) throw new Error('Failed to fetch users');
+    const result = await response.json();
+    return result.data;
+  }
+
+  async deleteUser(userId: string): Promise<void> {
+    const response = await fetch(`${API_BASE_URL}/api/users/${userId}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${ADMIN_API_KEY}`
+      }
+    });
+    if (!response.ok) throw new Error('Failed to delete user');
+  }
+
+  // Database management methods
+  async getDatabaseInfo(): Promise<{ collections: Record<string, number>; totalRecords: number }> {
+    const response = await fetch(`${API_BASE_URL}/api/database/info`, {
+      headers: {
+        'Authorization': `Bearer ${ADMIN_API_KEY}`
+      }
+    });
+    if (!response.ok) throw new Error('Failed to get database info');
+    const result = await response.json();
+    return result.data;
+  }
+
+  async resetDatabase(confirmation: string): Promise<{ message: string; deletedRecords: Record<string, number>; totalDeleted: number }> {
+    const response = await fetch(`${API_BASE_URL}/api/database/reset`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${ADMIN_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ confirmation })
+    });
+    if (!response.ok) throw new Error('Failed to reset database');
+    return response.json();
   }
 
   // Health check
