@@ -3449,9 +3449,14 @@ if (process.env.NODE_ENV === 'test') {
 
 async function startServer() {
   try {
-    // Connect to database first
-    await connectDatabase();
-    console.log('✅ Database connected successfully');
+    // Try to connect to database (optional)
+    try {
+      await connectDatabase();
+      console.log('✅ Database connected successfully');
+    } catch (dbError) {
+      console.warn('⚠️ Database connection failed, continuing without database:', dbError.message);
+      console.log('📝 Some features will be limited without database');
+    }
     
     // Start HTTP server with WebSocket support
     server.listen(PORT, async () => {

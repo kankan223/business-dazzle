@@ -27,24 +27,122 @@ const COLLECTIONS = {
   INVOICES: 'invoices'
 };
 
-// Connect to MongoDB
+// In-memory fallback database
+let inMemoryDb = new Map();
+
+function createInMemoryFallback() {
+  console.log('🗄️ Creating in-memory database fallback');
+  return {
+    collection: (name) => ({
+      find: (query = {}) => ({
+        toArray: async () => {
+          const collection = inMemoryDb.get(name) || [];
+          return collection.filter(item => {
+            // Simple query matching
+            for (const [key, value] of Object.entries(query)) {
+              if (item[key] !== value) return false;
+            }
+            return true;
+          });
+        },
+        findOne: async (query) => {
+          const collection = inMemoryDb.get(name) || [];
+          return collection.find(item => {
+            for (const [key, value] of Object.entries(query)) {
+              if (item[key] !== value) return false;
+            }
+            return true;
+          });
+        },
+        sort: (sortObj) => ({
+          toArray: async () => {
+            const collection = inMemoryDb.get(name) || [];
+            return [...collection];
+          }
+        })
+      }),
+      insertOne: async (doc) => {
+        const collection = inMemoryDb.get(name) || [];
+        const newDoc = { ...doc, _id: doc.id || Math.random().toString(36) };
+        collection.push(newDoc);
+        inMemoryDb.set(name, collection);
+        return { insertedId: newDoc._id };
+      },
+      updateOne: async (query, update) => {
+        const collection = inMemoryDb.get(name) || [];
+        const index = collection.findIndex(item => {
+          for (const [key, value] of Object.entries(query)) {
+            if (item[key] !== value) return false;
+          }
+          return true;
+        });
+        if (index !== -1) {
+          collection[index] = { ...collection[index], ...update.$set };
+          inMemoryDb.set(name, collection);
+        }
+        return { modifiedCount: index !== -1 ? 1 : 0 };
+      },
+      deleteOne: async (query) => {
+        const collection = inMemoryDb.get(name) || [];
+        const index = collection.findIndex(item => {
+          for (const [key, value] of Object.entries(query)) {
+            if (item[key] !== value) return false;
+          }
+          return true;
+        });
+        if (index !== -1) {
+          collection.splice(index, 1);
+          inMemoryDb.set(name, collection);
+        }
+        return { deletedCount: index !== -1 ? 1 : 0 };
+      }
+    })
+  };
+}
+
+async function initializeDefaultData() {
+  console.log('🔧 Initializing default data in memory database');
+  
+  // Initialize with some default data
+  const defaultUsers = [
+    {
+      id: 'admin_user',
+      name: 'Admin User',
+      phone: '+910000000000',
+      platform: 'telegram',
+      telegramId: '0',
+      isActive: true,
+      registeredAt: new Date(),
+      lastActiveAt: new Date()
+    }
+  ];
+  
+  inMemoryDb.set('users', defaultUsers);
+  inMemoryDb.set('approvals', []);
+  inMemoryDb.set('orders', []);
+  inMemoryDb.set('conversations', []);
+  inMemoryDb.set('inventory', []);
+  
+  console.log('✅ Default data initialized');
+}
+
+// Connect to MongoDB (optional)
 async function connectDatabase() {
+  if (process.env.SKIP_DATABASE === 'true') {
+    console.log('⚠️ Database connection skipped (SKIP_DATABASE=true)');
+    return;
+  }
+
   try {
-    client = new MongoClient(MONGODB_URI);
+    client = new MongoClient(MONGODB_URI, {
+      serverSelectionTimeoutMS: 2000, // Short timeout
+      connectTimeoutMS: 2000
+    });
     await client.connect();
     db = client.db(DB_NAME);
-    
-    console.log('✅ Connected to MongoDB database');
-    
-    // Create indexes for better performance
-    await createIndexes();
-    
-    // Initialize default data
-    await initializeDefaultData();
-    
-    return db;
+    console.log('✅ Connected to MongoDB:', DB_NAME);
   } catch (error) {
-    console.error('❌ Database connection error:', error);
+    console.error('❌ Database connection error:', error.message);
     console.log('⚠️ Using in-memory fallback database (data will be lost on restart)');
     
     // Initialize in-memory fallback
