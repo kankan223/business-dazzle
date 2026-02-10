@@ -133,24 +133,69 @@ async function connectDatabase() {
     return;
   }
 
-  try {
-    client = new MongoClient(MONGODB_URI, {
-      serverSelectionTimeoutMS: 2000, // Short timeout
-      connectTimeoutMS: 2000
-    });
-    await client.connect();
-    db = client.db(DB_NAME);
-    console.log('✅ Connected to MongoDB:', DB_NAME);
-  } catch (error) {
-    console.error('❌ Database connection error:', error.message);
-    console.log('⚠️ Using in-memory fallback database (data will be lost on restart)');
-    
-    // Initialize in-memory fallback
-    db = createInMemoryFallback();
-    await initializeDefaultData();
-    
-    return db;
+  const maxRetries = 5;
+  const retryDelay = 3000; // 3 seconds
+  let attempt = 0;
+
+  while (attempt < maxRetries) {
+    try {
+      console.log(`🔗 Attempting to connect to MongoDB (attempt ${attempt + 1}/${maxRetries})...`);
+      
+      client = new MongoClient(MONGODB_URI, {
+        serverSelectionTimeoutMS: 10000, // Increased timeout
+        connectTimeoutMS: 10000,
+        maxPoolSize: 10,
+        minPoolSize: 2,
+        maxIdleTimeMS: 30000,
+        waitQueueTimeoutMS: 5000,
+        retryWrites: true,
+        retryReads: true,
+        heartbeatFrequencyMS: 10000
+      });
+      
+      await client.connect();
+      db = client.db(DB_NAME);
+      
+      // Test the connection
+      await db.admin().ping();
+      console.log('✅ Connected to MongoDB:', DB_NAME);
+      
+      // Set up connection monitoring
+      client.on('serverHeartbeatFailed', (event) => {
+        console.warn('⚠️ MongoDB heartbeat failed:', event);
+      });
+      
+      client.on('serverOpening', (event) => {
+        console.log('🔗 MongoDB server opening:', event.address);
+      });
+      
+      client.on('serverClosed', (event) => {
+        console.warn('⚠️ MongoDB server closed:', event.address);
+      });
+      
+      return db;
+      
+    } catch (error) {
+      attempt++;
+      console.error(`❌ Database connection attempt ${attempt} failed:`, error.message);
+      
+      if (attempt >= maxRetries) {
+        console.error('💥 Max connection attempts reached. Using in-memory fallback.');
+        break;
+      }
+      
+      console.log(`⏳ Retrying in ${retryDelay / 1000} seconds...`);
+      await new Promise(resolve => setTimeout(resolve, retryDelay));
+    }
   }
+
+  console.log('⚠️ Using in-memory fallback database (data will be lost on restart)');
+  
+  // Initialize in-memory fallback
+  db = createInMemoryFallback();
+  await initializeDefaultData();
+  
+  return db;
 }
 
 // Create in-memory fallback database
@@ -392,9 +437,28 @@ function getDatabase() {
 
 // Close database connection
 async function closeDatabase() {
-  if (client) {
-    await client.close();
-    console.log('✅ Database connection closed');
+  try {
+    if (client) {
+      await client.close();
+      console.log('✅ Database connection closed');
+    }
+  } catch (error) {
+    console.error('❌ Error closing database:', error.message);
+  }
+}
+
+// Check database health
+async function checkDatabaseHealth() {
+  try {
+    if (!db || !client) {
+      return { status: 'disconnected', error: 'Database not initialized' };
+    }
+    
+    // Ping the database
+    await db.admin().ping();
+    return { status: 'healthy', timestamp: new Date() };
+  } catch (error) {
+    return { status: 'unhealthy', error: error.message, timestamp: new Date() };
   }
 }
 
@@ -540,7 +604,7 @@ const ApprovalOperations = {
   
   // Update approval status
   async updateStatus(id, status, resolvedBy) {
-    return await db.collection(COLLECTIONS.APPROVALS).updateOne(
+    const result = await db.collection(COLLECTIONS.APPROVALS).updateOne(
       { id },
       {
         $set: {
@@ -550,6 +614,12 @@ const ApprovalOperations = {
         }
       }
     );
+    
+    // Return the updated approval
+    if (result.modifiedCount > 0) {
+      return await db.collection(COLLECTIONS.APPROVALS).findOne({ id });
+    }
+    return null;
   },
 
   // Get approval by ID
@@ -567,10 +637,16 @@ const ApprovalOperations = {
 
   // Update approval (full update)
   async update(id, updateData) {
-    return await db.collection(COLLECTIONS.APPROVALS).updateOne(
+    const result = await db.collection(COLLECTIONS.APPROVALS).updateOne(
       { id },
       { $set: updateData }
     );
+    
+    // Return the updated approval
+    if (result.modifiedCount > 0) {
+      return await db.collection(COLLECTIONS.APPROVALS).findOne({ id });
+    }
+    return null;
   },
 
   // Delete approval
@@ -664,11 +740,17 @@ const InventoryOperations = {
   
   // Create new inventory item
   async create(item) {
+    const now = new Date();
+    const dateStr = now.getFullYear() + 
+      String(now.getMonth() + 1).padStart(2, '0') + 
+      String(now.getDate()).padStart(2, '0');
+    const randomSuffix = Math.random().toString(36).substr(2, 9).toUpperCase();
+    
     const newItem = {
       ...item,
-      id: `inv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      createdAt: new Date(),
-      updatedAt: new Date()
+      id: `INV-${dateStr}-${randomSuffix}`,
+      createdAt: now,
+      updatedAt: now
     };
     
     await db.collection(COLLECTIONS.INVENTORY).insertOne(newItem);
@@ -1046,6 +1128,7 @@ module.exports = {
   connectDatabase,
   getDatabase,
   closeDatabase,
+  checkDatabaseHealth,
   BotOperations,
   ConversationOperations,
   ApprovalOperations,

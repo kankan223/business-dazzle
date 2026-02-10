@@ -3,18 +3,21 @@ import { getTimeAgo } from '@/hooks/use-time-ago';
 import { SidebarItem } from '@/components/sidebar-item';
 import { apiService, type Bot, type Conversation, type Approval, type Stats } from '@/services/api';
 import {
-  Bot as BotIcon, MessageSquare, FileText, Package, Shield, Bell,
+  Bot as BotIcon, MessageSquare, FileText, Package, Shield,
   Settings, BarChart3, CheckCircle, XCircle,
   Filter, Phone, Mic, Send, RefreshCw, Lock,
   Database, Activity, CheckCheck,
-  Menu, Plus,
+  Menu, Plus, X,
   Eye, Download, Play, Pause, Key, Fingerprint,
   AlertTriangle, Check, Edit, Trash2,
-  Moon, Sun
+  Moon, Sun, TrendingUp, User, LogOut
 } from 'lucide-react';
 import { VoiceInput } from './components/VoiceInput';
 import { DirectCommand } from './components/DirectCommand';
 import { DebugPanel } from './components/DebugPanel';
+import { Notifications } from './components/Notifications';
+import { CustomerAnalytics } from './components/CustomerAnalytics';
+import Search from './components/Search';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -26,6 +29,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sh
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { toast } from 'sonner';
 import { Toaster } from '@/components/ui/sonner';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
@@ -33,9 +37,11 @@ import './App.css';
 
 // ==================== MAIN COMPONENT ====================
 
-function App() {
+export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [bots, setBots] = useState<Bot[]>([]);
+  const [approvals, setApprovals] = useState<Approval[]>([]);
   const [darkMode, setDarkMode] = useState(() => {
     // Check localStorage or system preference
     const savedTheme = localStorage.getItem('theme');
@@ -44,89 +50,14 @@ function App() {
     }
     return window.matchMedia('(prefers-color-scheme: dark)').matches;
   });
-  const [bots, setBots] = useState<Bot[]>([]);
-  const [approvals, setApprovals] = useState<Approval[]>([]);
-  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [activityData, setActivityData] = useState<any>(null);
+  const [lowStockWarnings, setLowStockWarnings] = useState<any[]>([]);
   const [orders, setOrders] = useState<any[]>([]);
   const [inventory, setInventory] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
-  const [activityData, setActivityData] = useState<any>(null);
-  const [lowStockWarnings, setLowStockWarnings] = useState<any[]>([]);
-
-  // Toggle dark mode
-  const toggleDarkMode = useCallback(() => {
-    setDarkMode(prev => {
-      const newMode = !prev;
-      localStorage.setItem('theme', newMode ? 'dark' : 'light');
-      if (newMode) {
-        document.documentElement.classList.add('dark');
-      } else {
-        document.documentElement.classList.remove('dark');
-      }
-      return newMode;
-    });
-  }, []);
-
-  // Apply dark mode on mount
-  useEffect(() => {
-    if (darkMode) {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-  }, [darkMode]);
-
-  // Generate chart data from activity data
-  const chartData = useMemo(() => {
-    if (!activityData) {
-      return [
-        { name: 'Mon', messages: 0, orders: 0, approvals: 0 },
-        { name: 'Tue', messages: 0, orders: 0, approvals: 0 },
-        { name: 'Wed', messages: 0, orders: 0, approvals: 0 },
-        { name: 'Thu', messages: 0, orders: 0, approvals: 0 },
-        { name: 'Fri', messages: 0, orders: 0, approvals: 0 },
-        { name: 'Sat', messages: 0, orders: 0, approvals: 0 },
-        { name: 'Sun', messages: 0, orders: 0, approvals: 0 }
-      ];
-    }
-
-    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    const today = new Date();
-    
-    return days.map((day, index) => {
-      const date = new Date(today);
-      date.setDate(today.getDate() - (6 - index));
-      
-      // For demo purposes, use activity summary distributed across days
-      const dayFactor = index === 6 ? 0.3 : (index === 5 ? 0.5 : 1); // Weekend lower activity
-      
-      return {
-        name: day,
-        messages: Math.floor((activityData.summary.totalConversations / 5) * dayFactor) || 0,
-        orders: Math.floor((activityData.summary.totalOrders / 5) * dayFactor) || 0,
-        approvals: Math.floor((activityData.summary.pendingApprovals / 5) * dayFactor) || 0
-      };
-    });
-  }, [activityData]);
-
-  // Generate platform distribution data
-  const platformData = useMemo(() => {
-    if (!activityData) {
-      return [
-        { name: 'Telegram', value: 65, color: '#0088cc' },
-        { name: 'WhatsApp', value: 35, color: '#25D366' }
-      ];
-    }
-
-    const telegramCount = activityData.summary.totalConversations * 0.65;
-    const whatsappCount = activityData.summary.totalConversations * 0.35;
-
-    return [
-      { name: 'Telegram', value: Math.round(telegramCount), color: '#0088cc' },
-      { name: 'WhatsApp', value: Math.round(whatsappCount), color: '#25D366' }
-    ];
-  }, [activityData]);
-
+  const [stats, setStats] = useState<Stats | null>(null);
   const [orderForm, setOrderForm] = useState({
     customerName: '',
     customerPhone: '',
@@ -134,7 +65,6 @@ function App() {
     quantity: 1
   });
   const [securityLogs, setSecurityLogs] = useState<any[]>([]);
-  const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
   const [showApprovalDialog, setShowApprovalDialog] = useState(false);
@@ -164,8 +94,78 @@ function App() {
   const [autoApproveEnabled, setAutoApproveEnabled] = useState(false);
   const [autoApproveThreshold, setAutoApproveThreshold] = useState(5000);
   const [processingApprovalId, setProcessingApprovalId] = useState<string | null>(null);
-
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+
+  // Low stock warnings are displayed via toast notifications
+  console.log('Low stock warnings count:', lowStockWarnings.length);
+
+  // Apply dark mode on mount
+  useEffect(() => {
+    if (darkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [darkMode]);
+
+  // Calculate platform distribution from actual conversation data
+  const platformCounts = useMemo(() => {
+    if (!conversations || conversations.length === 0) {
+      return { telegram: 0, whatsapp: 0 };
+    }
+
+    return conversations.reduce((acc, conv) => {
+      const platform = conv.platform || 'telegram';
+      acc[platform] = (acc[platform] || 0) + 1;
+      return acc;
+    }, { telegram: 0, whatsapp: 0 });
+  }, [conversations]);
+
+  // Generate chart data from activity data
+  const chartData = useMemo(() => {
+    if (!activityData) {
+      return [
+        { name: 'Mon', messages: 0, orders: 0, approvals: 0 },
+        { name: 'Tue', messages: 0, orders: 0, approvals: 0 },
+        { name: 'Wed', messages: 0, orders: 0, approvals: 0 },
+        { name: 'Thu', messages: 0, orders: 0, approvals: 0 },
+        { name: 'Fri', messages: 0, orders: 0, approvals: 0 },
+        { name: 'Sat', messages: 0, orders: 0, approvals: 0 },
+        { name: 'Sun', messages: 0, orders: 0, approvals: 0 }
+      ];
+    }
+
+    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    
+    return days.map((day) => {
+      const dayFactor = Math.random() * 0.5 + 0.5;
+      return {
+        name: day,
+        messages: Math.floor((activityData.summary.totalConversations / 5) * dayFactor) || 0,
+        orders: Math.floor((activityData.summary.totalOrders / 5) * dayFactor) || 0,
+        approvals: Math.floor((activityData.summary.pendingApprovals / 5) * dayFactor) || 0
+      };
+    });
+  }, [activityData]);
+
+  // Generate platform distribution data
+  const platformData = useMemo(() => {
+    if (!activityData || !activityData.summary) {
+      return [
+        { name: 'Telegram', value: 65, color: '#0088cc' },
+        { name: 'WhatsApp', value: 35, color: '#25D366' }
+      ];
+    }
+
+    const total = platformCounts.telegram + platformCounts.whatsapp;
+    const telegramPercent = total > 0 ? Math.round((platformCounts.telegram / total) * 100) : 0;
+    const whatsappPercent = total > 0 ? Math.round((platformCounts.whatsapp / total) * 100) : 0;
+
+    return [
+      { name: 'Telegram', value: telegramPercent, color: '#0088cc' },
+      { name: 'WhatsApp', value: whatsappPercent, color: '#25D366' }
+    ];
+  }, [activityData, platformCounts]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -183,13 +183,15 @@ function App() {
         // Fetch initial data
         const fetchData = async () => {
           try {
-            const [botsData, approvalsData, conversationsData, ordersData, inventoryData, usersData] = await Promise.all([
+            const [botsData, approvalsData, conversationsData, ordersData, inventoryData, usersData, activityData, statsData] = await Promise.all([
               apiService.getBots(),
               apiService.getApprovals(),
               apiService.getConversations(),
               apiService.getOrders(),
               apiService.getInventory(),
-              apiService.getUsers()
+              apiService.getUsers(),
+              apiService.getActivity(),
+              apiService.getStats()
             ]);
             
             setBots(botsData);
@@ -198,6 +200,8 @@ function App() {
             setOrders(ordersData);
             setInventory(inventoryData);
             setUsers(usersData);
+            setActivityData(activityData);
+            setStats(statsData);
           } catch (error) {
             console.error('Failed to fetch initial data:', error);
             toast.error('Failed to load data');
@@ -221,27 +225,61 @@ function App() {
       toast.success(`Approval ${data.status} by ${data.resolvedBy}`);
     });
 
+    apiService.onApprovalCreated((data) => {
+      setApprovals(prev => [data, ...prev]);
+      toast.info('New approval request received');
+    });
+
+    apiService.onOrderCreated((data) => {
+      setOrders(prev => [data, ...prev]);
+      toast.info('New order created');
+    });
+
+    apiService.onConversationUpdated((data) => {
+      console.log('Conversation updated:', data);
+      
+      // Update conversations list
+      setConversations(prev => {
+        const existingIndex = prev.findIndex(conv => conv.customerId === data.customerId);
+        if (existingIndex >= 0) {
+          const updated = [...prev];
+          updated[existingIndex] = {
+            ...updated[existingIndex],
+            lastMessageAt: data.lastMessageAt,
+            platform: data.platform
+          };
+          return updated;
+        }
+        
+        // Add new conversation if not exists
+        return [...prev, {
+          id: data.customerId,
+          customerId: data.customerId,
+          customerName: `Customer ${data.customerId}`,
+          customerPhone: data.customerId,
+          messages: [],
+          lastMessageAt: data.lastMessageAt,
+          createdAt: new Date().toISOString(),
+          status: 'active',
+          platform: data.platform,
+          botId: 'telegram_bot'
+        }];
+      });
+    });
+
     apiService.onNewMessage((data) => {
       console.log('New message received:', data);
       
       // Update conversations if message belongs to a conversation
       if (data.conversationId) {
         setConversations(prev => prev.map(conv => 
-          conv.id === data.conversationId 
-            ? { ...conv, messages: [...conv.messages, data], lastMessageAt: data.timestamp }
-            : conv
+          conv.id === data.conversationId ? { 
+            ...conv, 
+            lastMessageAt: data.timestamp,
+            messages: [...conv.messages, data]
+          } : conv
         ));
       }
-      
-      // Show notification for new messages
-      toast.success(`New message from ${data.senderName || 'Customer'}`);
-    });
-
-    apiService.onConversationUpdate((data) => {
-      console.log('Conversation update:', data);
-      setConversations(prev => prev.map(conv => 
-        conv.id === data.conversationId ? { ...conv, ...data } : conv
-      ));
     });
 
     apiService.onBotUpdate((data) => {
@@ -668,6 +706,8 @@ function App() {
           </SheetHeader>
           <nav className="p-4 space-y-1">
             <SidebarItem id="dashboard" icon={BarChart3} label="Dashboard" activeTab={activeTab} navigate={navigate} />
+            <SidebarItem id="search" icon={TrendingUp} label="Search" activeTab={activeTab} navigate={navigate} />
+            <SidebarItem id="analytics" icon={TrendingUp} label="Analytics" activeTab={activeTab} navigate={navigate} />
             <SidebarItem id="bots" icon={BotIcon} label="Bot Management" activeTab={activeTab} navigate={navigate} />
             <SidebarItem id="approvals" icon={CheckCheck} label="Approvals" badge={stats?.pendingApprovals || 0} activeTab={activeTab} navigate={navigate} />
             <SidebarItem id="conversations" icon={MessageSquare} label="Conversations" badge={conversations.length} activeTab={activeTab} navigate={navigate} />
@@ -694,24 +734,11 @@ function App() {
               <p className="text-xs text-muted-foreground">Admin Dashboard</p>
             </div>
           </div>
-
-          <Card className="mt-4">
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2 mb-2">
-                <Shield className="w-4 h-4 text-green-600" />
-                <span className="text-xs font-semibold text-green-800">System Secure</span>
-              </div>
-              <p className="text-xs text-green-700">AES-256 encryption active</p>
-              <div className="flex items-center gap-2 mt-2">
-                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                <span className="text-xs text-green-600">{stats?.activeBots || 0} bots online</span>
-              </div>
-            </CardContent>
-          </Card>
         </div>
-
-        <nav className="flex-1 p-4 space-y-1">
+        <nav className="p-4 space-y-1 flex-1 overflow-y-auto">
           <SidebarItem id="dashboard" icon={BarChart3} label="Dashboard" activeTab={activeTab} navigate={navigate} />
+          <SidebarItem id="search" icon={TrendingUp} label="Search" activeTab={activeTab} navigate={navigate} />
+          <SidebarItem id="analytics" icon={TrendingUp} label="Analytics" activeTab={activeTab} navigate={navigate} />
           <SidebarItem id="bots" icon={BotIcon} label="Bot Management" activeTab={activeTab} navigate={navigate} />
           <SidebarItem id="approvals" icon={CheckCheck} label="Approvals" badge={stats?.pendingApprovals || 0} activeTab={activeTab} navigate={navigate} />
           <SidebarItem id="conversations" icon={MessageSquare} label="Conversations" badge={conversations.length} activeTab={activeTab} navigate={navigate} />
@@ -719,19 +746,93 @@ function App() {
           <SidebarItem id="orders" icon={FileText} label="Orders" badge={approvals.filter(a => a.status === 'pending').length} activeTab={activeTab} navigate={navigate} />
           <SidebarItem id="users" icon={Database} label="Users" activeTab={activeTab} navigate={navigate} />
           <SidebarItem id="inventory" icon={Package} label="Inventory" activeTab={activeTab} navigate={navigate} />
+          <SidebarItem id="debug" icon={Eye} label="Debug" activeTab={activeTab} navigate={navigate} />
           <SidebarItem id="security" icon={Shield} label="Security & Privacy" activeTab={activeTab} navigate={navigate} />
           <SidebarItem id="settings" icon={Settings} label="Settings" activeTab={activeTab} navigate={navigate} />
         </nav>
       </aside>
 
+      {/* Mobile Sidebar Overlay */}
+      {mobileSidebarOpen && (
+        <div className="lg:hidden fixed inset-0 z-50 flex">
+          <div 
+            className="fixed inset-0 bg-black/50" 
+            onClick={() => setMobileSidebarOpen(false)}
+          />
+          <div className="relative flex flex-col w-80 h-full bg-white">
+            <div className="p-4 border-b border-gray-200">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-blue-700 rounded-lg flex items-center justify-center">
+                    <BotIcon className="w-6 h-6 text-white" />
+                  </div>
+                  <div>
+                    <span className="text-lg font-bold">Bharat Biz-Agent</span>
+                    <p className="text-xs text-muted-foreground">Admin Dashboard</p>
+                  </div>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setMobileSidebarOpen(false)}
+                  className="p-2"
+                >
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+            </div>
+            <nav className="p-4 space-y-1 flex-1 overflow-y-auto">
+              <SidebarItem id="dashboard" icon={BarChart3} label="Dashboard" activeTab={activeTab} navigate={navigate} />
+              <SidebarItem id="search" icon={TrendingUp} label="Search" activeTab={activeTab} navigate={navigate} />
+              <SidebarItem id="analytics" icon={TrendingUp} label="Analytics" activeTab={activeTab} navigate={navigate} />
+              <SidebarItem id="bots" icon={BotIcon} label="Bot Management" activeTab={activeTab} navigate={navigate} />
+              <SidebarItem id="approvals" icon={CheckCheck} label="Approvals" badge={stats?.pendingApprovals || 0} activeTab={activeTab} navigate={navigate} />
+              <SidebarItem id="conversations" icon={MessageSquare} label="Conversations" badge={conversations.length} activeTab={activeTab} navigate={navigate} />
+              <SidebarItem id="commands" icon={Send} label="Commands" activeTab={activeTab} navigate={navigate} />
+              <SidebarItem id="orders" icon={FileText} label="Orders" badge={approvals.filter(a => a.status === 'pending').length} activeTab={activeTab} navigate={navigate} />
+              <SidebarItem id="users" icon={Database} label="Users" activeTab={activeTab} navigate={navigate} />
+              <SidebarItem id="inventory" icon={Package} label="Inventory" activeTab={activeTab} navigate={navigate} />
+              <SidebarItem id="debug" icon={Eye} label="Debug" activeTab={activeTab} navigate={navigate} />
+              <SidebarItem id="security" icon={Shield} label="Security & Privacy" activeTab={activeTab} navigate={navigate} />
+            </nav>
+          </div>
+        </div>
+      )}
+
       {/* Main Content */}
       <main className="flex-1 flex flex-col overflow-hidden">
-        {/* Header */}
-        <header className="h-16 border-b flex items-center justify-between px-4 lg:px-6 bg-card/50 backdrop-blur-sm">
+        {/* Mobile Header */}
+        <header className="lg:hidden bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <Button variant="ghost" size="icon" className="lg:hidden" onClick={() => setSidebarOpen(true)}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setMobileSidebarOpen(!mobileSidebarOpen)}
+              className="p-2"
+            >
               <Menu className="w-5 h-5" />
             </Button>
+            <div>
+              <span className="text-lg font-bold">Bharat Biz-Agent</span>
+              <p className="text-xs text-muted-foreground">Admin Dashboard</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Notifications />
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setDarkMode(!darkMode)}
+              className="p-2"
+            >
+              {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+            </Button>
+          </div>
+        </header>
+
+        {/* Desktop Header */}
+        <header className="hidden lg:flex h-16 border-b items-center justify-between px-4 lg:px-6 bg-card/50 backdrop-blur-sm">
+          <div className="flex items-center gap-3">
             <div>
               <h2 className="font-semibold capitalize">{activeTab.replace('-', ' ')}</h2>
               <p className="text-xs text-muted-foreground hidden sm:block">
@@ -739,53 +840,60 @@ function App() {
               </p>
             </div>
           </div>
-
           <div className="flex items-center gap-3">
-            <div className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-green-50 border border-green-200 rounded-full">
-              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-              <span className="text-xs font-medium text-green-700">All Systems Operational</span>
-            </div>
-            <Button 
-              variant="ghost" 
-              size="icon" 
-              onClick={toggleDarkMode} 
-              className="relative"
-              aria-label={`Switch to ${darkMode ? 'light' : 'dark'} mode`}
-              title={`Switch to ${darkMode ? 'light' : 'dark'} mode`}
-            >
-              {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+            <Notifications />
+            <Button variant="ghost" size="icon" onClick={() => setDarkMode(!darkMode)}>
+              {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </Button>
-            <Button 
-              variant="ghost" 
-              size="icon" 
-              className="relative" 
-              onClick={() => navigate('approvals')}
-              aria-label={`View approvals ${approvals.filter(a => a.status === 'pending').length > 0 ? `(${approvals.filter(a => a.status === 'pending').length} pending)` : ''}`}
-              title="View approvals"
-            >
-              <Bell className="w-5 h-5" />
-              {approvals.filter(a => a.status === 'pending').length > 0 && (
-                <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
-                  {approvals.filter(a => a.status === 'pending').length}
-                </span>
-              )}
-            </Button>
-            <Avatar className="h-9 w-9 cursor-pointer" onClick={() => toast.info('Profile settings coming soon')}>
-              <AvatarFallback className="bg-gradient-to-br from-orange-500 to-orange-600 text-white text-sm">AD</AvatarFallback>
-            </Avatar>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className="relative">
+                  <Avatar className="w-8 h-8">
+                    <AvatarFallback className="bg-gradient-to-br from-orange-500 to-orange-600 text-white text-sm">AD</AvatarFallback>
+                  </Avatar>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel>Admin User</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem>
+                  <User className="mr-2 h-4 w-4" />
+                  <span>Profile</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem>
+                  <Settings className="mr-2 h-4 w-4" />
+                  <span>Settings</span>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem>
+                  <LogOut className="mr-2 h-4 w-4" />
+                  <span>Log out</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </header>
 
         {/* Content */}
         <div className="flex-1 overflow-hidden">
           <ScrollArea className="h-full">
-            <div className="p-4 lg:p-6">
+            <div className="p-4 lg:p-6 space-y-6">
+
+              {/* SEARCH */}
+              {activeTab === 'search' && (
+                <Search />
+              )}
+
+              {/* ANALYTICS */}
+              {activeTab === 'analytics' && (
+                <CustomerAnalytics />
+              )}
 
               {/* DASHBOARD */}
               {activeTab === 'dashboard' && (
                 <div className="space-y-6">
                   {/* Stats Grid */}
-                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+                  <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
                     <Card className="bg-gradient-to-br from-blue-50 to-blue-100 border-blue-200 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate('bots')}>
                       <CardHeader className="pb-2">
                         <CardDescription className="text-blue-700 flex items-center gap-2">
@@ -2375,5 +2483,3 @@ function App() {
     </div>
   );
 }
-
-export default App;

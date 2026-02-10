@@ -22,6 +22,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const crypto = require('crypto');
 const fs = require('fs');
+const fsPromises = require('fs').promises;
 const http = require('http');
 const socketIo = require('socket.io');
 
@@ -29,16 +30,28 @@ const socketIo = require('socket.io');
 const { 
   connectDatabase, 
   getDatabase, 
+  closeDatabase,
+  checkDatabaseHealth,
   BotOperations, 
   ConversationOperations, 
   ApprovalOperations, 
-  CustomerOperations,
-  UserOperations,
-  AuditOperations,
-  InventoryOperations,
-  OrderOperations,
-  InvoiceOperations
+  CustomerOperations, 
+  UserOperations, 
+  AuditOperations, 
+  InventoryOperations, 
+  OrderOperations, 
+  InvoiceOperations,
+  COLLECTIONS 
 } = require('./database');
+
+// Import notification service
+const notificationService = require('./notification-service');
+const securityService = require('./security-service');
+const backupService = require('./backup-service');
+const analyticsService = require('./analytics-service');
+const searchService = require('./search-service');
+const exportService = require('./export-service');
+const i18nService = require('./i18n-service');
 const geminiService = require('./gemini-service');
 const intentProcessor = require('./intent-processor');
 const indianLanguageProcessor = require('./indian-language-processor');
@@ -70,14 +83,13 @@ function isAdmin(userId) {
   const session = adminSessions.get(userId.toString());
   if (!session) return false;
   
-  // Sessions expire after 1 hour
-  const sessionAge = Date.now() - new Date(session.authenticatedAt).getTime();
-  if (sessionAge > 60 * 60 * 1000) { // 1 hour
+  // Check if session has expired
+  if (session.expiresAt && new Date() > new Date(session.expiresAt)) {
     adminSessions.delete(userId.toString());
     return false;
   }
   
-  return true;
+  return session.authenticated;
 }
 
 // Authenticate admin user
@@ -85,7 +97,8 @@ function authenticateAdmin(userId, passcode) {
   if (passcode === ADMIN_PASSCODE) {
     adminSessions.set(userId.toString(), {
       authenticated: true,
-      authenticatedAt: new Date().toISOString()
+      authenticatedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000) // 1 hour timeout
     });
     return true;
   }
@@ -113,6 +126,14 @@ function emitDebugEvent(userId, eventType, payload) {
     if (connection.readyState === 1) { // WebSocket open
       connection.write(`data: ${JSON.stringify(event)}\n\n`);
     }
+  });
+  
+  // Also broadcast to admin dashboard via WebSocket
+  broadcastToAdmins('debug.event', {
+    userId,
+    eventType,
+    payload,
+    timestamp: event.timestamp
   });
 }
 
@@ -149,23 +170,29 @@ function disableDebugMode(userId) {
 const app = express();
 
 // Health check endpoint (always responds 200 OK)
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
   try {
+    // Check database health
+    const dbHealth = await database.checkDatabaseHealth();
+    
     const health = {
-      status: 'healthy',
+      status: dbHealth.status === 'healthy' ? 'healthy' : 'degraded',
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
       memory: process.memoryUsage(),
       version: '1.0.0',
       services: {
-        database: 'connected',
+        database: dbHealth.status,
         ai: 'operational',
         telegram: telegramBot ? 'connected' : 'disabled',
         websocket: 'active'
+      },
+      details: {
+        database: dbHealth
       }
     };
     
-    res.status(200).json(health);
+    res.status(dbHealth.status === 'healthy' ? 200 : 503).json(health);
   } catch (error) {
     // Even if there's an error, return 200 OK with basic info
     res.status(200).json({
@@ -325,6 +352,9 @@ function broadcastToAdmins(event, data) {
   console.log(`📡 Broadcasting ${event} to admins:`, data);
   io.to('admin_room').emit(event, data);
 }
+
+// Make broadcast function globally available for notification service
+global.broadcastToAdmins = broadcastToAdmins;
 
 // Enhanced message broadcasting for bot messages
 async function broadcastMessageToAdmins(messageData) {
@@ -492,7 +522,13 @@ async function handleAdminApproval(telegramBot, chatId, adminId, approvalId, act
       adminNote: `Processed via Telegram by admin ${adminId}`
     };
 
-    await ApprovalOperations.update(approvalId, updateData);
+    const updatedApproval = await ApprovalOperations.update(approvalId, updateData);
+    
+    if (updatedApproval) {
+      // Broadcast update to admin dashboard
+      broadcastToAdmins('approval.updated', updatedApproval);
+      console.log('📡 Admin approval updated and broadcasted:', updatedApproval.id);
+    }
 
     // Log admin action
     logSecurityEvent('Admin Approval Action', adminId.toString(), 'telegram', 'info', 
@@ -562,6 +598,17 @@ async function handleAdminCreateOrder(telegramBot, chatId, adminId, orderDetails
     };
 
     const order = await OrderOperations.create(orderData);
+
+    // Emit real-time event to admin dashboard
+    broadcastToAdmins('order.created', order);
+    console.log('📡 Order created and broadcasted:', order.id);
+
+    // Create notification
+    notificationService.createBusinessNotification('order.created', {
+      orderId: order.id,
+      customerName: customerName,
+      userId: 'system'
+    });
 
     await safeSendTelegramMessage(telegramBot, chatId, 
       `✅ *ORDER CREATED*\n\n` +
@@ -679,24 +726,22 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(securityHeaders);
 
 // Basic rate limiting
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // 100 requests per 15 minutes
-  message: { error: 'API rate limit exceeded. Please try again later.' }
-});
+// Enhanced Rate Limiters with Security Service
+const apiLimiter = securityService.createIPRateLimiter(15 * 60 * 1000, 100);
+const commandLimiter = securityService.createEndpointRateLimiter('command', 60 * 1000, 30);
+const speechLimiter = securityService.createEndpointRateLimiter('speech', 60 * 1000, 10);
+const authLimiter = securityService.createBruteForceProtection(15 * 60 * 1000, 5);
+const ddosProtection = securityService.createDDoSProtection();
 
-const commandLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 30, // 30 commands per minute
-  message: { error: 'Too many commands. Please wait before trying again.' }
-});
-
-const speechLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 10, // 10 speech requests per minute
-  message: { error: 'Too many speech requests. Please wait before trying again.' }
-});
+// Apply security middleware
+app.use(securityService.createSecurityHeadersMiddleware());
+app.use(securityService.createRequestValidationMiddleware());
+app.use(securityService.createIPBlockingMiddleware());
+app.use(ddosProtection);
 app.use('/api', apiLimiter);
+
+// Apply i18n middleware
+app.use(i18nService.languageMiddleware());
 
 // ==================== DEBUG STREAM ENDPOINT ====================
 app.get('/api/debug/stream', (req, res) => {
@@ -1381,7 +1426,7 @@ async function handleTelegramMessage(message, telegramBot) {
       
       // Create approval request
       try {
-        await ApprovalOperations.create({
+        const approval = await ApprovalOperations.create({
           customerId: customerId,
           action: aiResponse.proposedAction,
           details: {
@@ -1394,6 +1439,18 @@ async function handleTelegramMessage(message, telegramBot) {
           requestedBy: 'ai',
           createdAt: new Date()
         });
+        
+        // Emit real-time event to admin dashboard
+        broadcastToAdmins('approval.created', approval);
+        console.log('📡 Approval created and broadcasted:', approval.id);
+        
+        // Create notification
+        notificationService.createBusinessNotification('approval.pending', {
+          approvalId: approval.id,
+          requestType: aiResponse.proposedAction,
+          userId: 'system'
+        });
+        
       } catch (approvalError) {
         console.error('Failed to create approval request:', approvalError);
       }
@@ -1448,6 +1505,23 @@ async function handleTelegramMessage(message, telegramBot) {
 
     // Step 7: Persist Everything
     try {
+      // Check if conversation exists, if not create it
+      const existingConversation = await ConversationOperations.getByCustomerId(customerId);
+      if (!existingConversation) {
+        await ConversationOperations.create({
+          customerId,
+          botId: 'telegram_bot',
+          customerName: `Customer ${customerId}`,
+          customerPhone: customerId,
+          messages: [],
+          lastMessageAt: new Date(),
+          createdAt: new Date(),
+          status: 'active',
+          platform: 'telegram'
+        });
+        console.log('📝 Created new conversation for customer:', customerId);
+      }
+
       await ConversationOperations.addMessage(customerId, {
         type: 'text',
         content: content,
@@ -1461,6 +1535,20 @@ async function handleTelegramMessage(message, telegramBot) {
           approvalRequired: approvalDecision.required
         }
       });
+      
+      // Emit conversation update to admin dashboard
+      const conversation = await ConversationOperations.getByCustomerId(customerId);
+      if (conversation) {
+        broadcastToAdmins('conversation.updated', {
+          ...conversation,
+          lastMessage: content,
+          lastMessageAt: new Date(),
+          platform: 'telegram',
+          intent: aiResponse.intent,
+          confidence: aiResponse.confidence
+        });
+        console.log('📡 Conversation updated and broadcasted:', customerId);
+      }
     } catch (persistError) {
       emitDebugEvent(userId, 'ERROR_OCCURRED', {
         errorType: 'conversation_persist_failed',
@@ -1595,6 +1683,17 @@ async function handleOrderCreation(entities, customerId) {
 
     const savedOrder = await OrderOperations.create(order);
     
+    // Emit real-time event to admin dashboard
+    broadcastToAdmins('order.created', savedOrder);
+    console.log('📡 Customer order created and broadcasted:', savedOrder.id);
+    
+    // Create notification
+    notificationService.createBusinessNotification('order.created', {
+      orderId: savedOrder.id,
+      customerName: 'Customer',
+      userId: 'system'
+    });
+    
     return { 
       status: 'success', 
       orderId: savedOrder.id,
@@ -1636,12 +1735,49 @@ async function handleInvoiceGeneration(entities, customerId) {
 
     const savedInvoice = await InvoiceOperations.create(invoice);
     
+    // Generate PDF invoice
+    const invoiceService = require('./invoice-service');
+    const generatedInvoice = await invoiceService.generateInvoice(savedInvoice.id, 'pdf');
+    
+    // Get customer details for personalized message
+    const customer = await CustomerOperations.getById(customerId);
+    const customerName = customer?.name || 'Customer';
+    
+    // Extract actual chatId from customerId (remove telegram- prefix)
+    const actualChatId = customerId.replace('telegram-', '');
+    
+    // Send invoice to customer via Telegram
+    const telegramBot = require('./bot-telegram');
+    await safeSendTelegramMessage(telegramBot, actualChatId, 
+      `🧾 *INVOICE GENERATED*\n\n` +
+      `Hello ${customerName}!\n\n` +
+      `📋 Invoice Details:\n` +
+      `Invoice ID: ${savedInvoice.id}\n` +
+      `Total Amount: ₹${invoice.totalAmount}\n` +
+      `Status: ${savedInvoice.status}\n\n` +
+      `📄 PDF invoice has been generated and saved.\n\n` +
+      `You can download it from the admin panel or request a copy anytime.\n\n` +
+      `Thank you for your business! 🙏`
+    );
+    
+    console.log('🧾 Invoice generated and sent to customer:', savedInvoice.id, 'chatId:', actualChatId);
+    
+    // Create notification
+    notificationService.createBusinessNotification('invoice.generated', {
+      invoiceId: savedInvoice.id,
+      amount: invoice.totalAmount,
+      customerName: customerName,
+      userId: 'system'
+    });
+    
     return { 
       status: 'success', 
       invoiceId: savedInvoice.id,
-      message: `Invoice generated for ₹${invoice.totalAmount}` 
+      pdfFile: generatedInvoice.filename,
+      message: `Invoice generated for ₹${invoice.totalAmount} and sent to ${customerName}` 
     };
   } catch (error) {
+    console.error('Invoice generation error:', error);
     return { status: 'error', message: 'Failed to generate invoice.' };
   }
 }
@@ -3317,15 +3453,18 @@ app.post('/api/approvals/:id/update', async (req, res) => {
     const { id } = req.params;
     const { status, resolvedBy } = req.body;
     
-    await ApprovalOperations.updateStatus(id, status, resolvedBy);
+    const updatedApproval = await ApprovalOperations.updateStatus(id, status, resolvedBy);
     
-    // Broadcast update to admin dashboard
-    broadcastToAdmins('approval_updated', { id, status, resolvedBy });
+    if (updatedApproval) {
+      // Broadcast update to admin dashboard
+      broadcastToAdmins('approval.updated', updatedApproval);
+      console.log('📡 Approval updated and broadcasted:', updatedApproval.id);
+      
+      // Log the action
+      await AuditOperations.log('approval_updated', { approvalId: id, status }, resolvedBy);
+    }
     
-    // Log the action
-    await AuditOperations.log('approval_updated', { approvalId: id, status }, resolvedBy);
-    
-    res.json({ success: true });
+    res.json({ success: true, approval: updatedApproval });
   } catch (error) {
     console.error('Error updating approval:', error);
     res.status(500).json({ error: 'Failed to update approval' });
@@ -3396,6 +3535,1273 @@ app.get('/api/security/logs', async (req, res) => {
   } catch (error) {
     console.error('Error fetching security logs:', error);
     res.status(500).json({ error: 'Failed to fetch security logs' });
+  }
+});
+
+// ==================== NOTIFICATIONS API ====================
+
+// Get all notifications
+app.get('/api/notifications', async (req, res) => {
+  try {
+    const { userId, limit = 50, unreadOnly = false } = req.query;
+    
+    let notifications;
+    if (unreadOnly === 'true') {
+      notifications = notificationService.getUserNotifications(userId || 'system', limit)
+        .filter(n => !n.read);
+    } else {
+      notifications = notificationService.getUserNotifications(userId || 'system', limit);
+    }
+    
+    res.json({
+      success: true,
+      data: notifications,
+      unreadCount: notificationService.getUnreadCount(userId || 'system')
+    });
+  } catch (error) {
+    console.error('Error fetching notifications:', error);
+    res.status(500).json({ error: 'Failed to fetch notifications' });
+  }
+});
+
+// Get unread notifications count
+app.get('/api/notifications/unread-count', async (req, res) => {
+  try {
+    const { userId } = req.query;
+    const count = notificationService.getUnreadCount(userId || 'system');
+    
+    res.json({
+      success: true,
+      unreadCount: count
+    });
+  } catch (error) {
+    console.error('Error fetching unread count:', error);
+    res.status(500).json({ error: 'Failed to fetch unread count' });
+  }
+});
+
+// Mark notification as read
+app.put('/api/notifications/:id/read', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { userId } = req.body;
+    
+    const success = notificationService.markAsRead(id, userId || 'system');
+    
+    if (success) {
+      res.json({
+        success: true,
+        message: 'Notification marked as read'
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        error: 'Notification not found'
+      });
+    }
+  } catch (error) {
+    console.error('Error marking notification as read:', error);
+    res.status(500).json({ error: 'Failed to mark notification as read' });
+  }
+});
+
+// Mark all notifications as read
+app.put('/api/notifications/read-all', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    const markedCount = notificationService.markAllAsRead(userId || 'system');
+    
+    res.json({
+      success: true,
+      message: `Marked ${markedCount} notifications as read`
+    });
+  } catch (error) {
+    console.error('Error marking all notifications as read:', error);
+    res.status(500).json({ error: 'Failed to mark all notifications as read' });
+  }
+});
+
+// Delete notification
+app.delete('/api/notifications/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { userId } = req.query;
+    
+    const success = notificationService.deleteNotification(id, userId || 'system');
+    
+    if (success) {
+      res.json({
+        success: true,
+        message: 'Notification deleted'
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        error: 'Notification not found'
+      });
+    }
+  } catch (error) {
+    console.error('Error deleting notification:', error);
+    res.status(500).json({ error: 'Failed to delete notification' });
+  }
+});
+
+// Get notification statistics
+app.get('/api/notifications/stats', async (req, res) => {
+  try {
+    const stats = notificationService.getStatistics();
+    
+    res.json({
+      success: true,
+      data: stats
+    });
+  } catch (error) {
+    console.error('Error fetching notification stats:', error);
+    res.status(500).json({ error: 'Failed to fetch notification stats' });
+  }
+});
+
+// Create custom notification (for admin/testing)
+app.post('/api/notifications', async (req, res) => {
+  try {
+    const { type, title, message, data = {}, priority = 'normal' } = req.body;
+    
+    if (!type || !title || !message) {
+      return res.status(400).json({
+        success: false,
+        error: 'Type, title, and message are required'
+      });
+    }
+    
+    const notification = notificationService.createNotification(type, title, message, data, priority);
+    
+    res.json({
+      success: true,
+      data: notification
+    });
+  } catch (error) {
+    console.error('Error creating notification:', error);
+    res.status(500).json({ error: 'Failed to create notification' });
+  }
+});
+
+// ==================== SECURITY MONITORING ENDPOINTS ====================
+
+// Get security statistics
+app.get('/api/security/stats', async (req, res) => {
+  try {
+    const stats = securityService.getSecurityStats();
+    
+    res.json({
+      success: true,
+      data: stats
+    });
+  } catch (error) {
+    console.error('Error fetching security stats:', error);
+    res.status(500).json({ error: 'Failed to fetch security stats' });
+  }
+});
+
+// Get security logs
+app.get('/api/security/logs', async (req, res) => {
+  try {
+    const { limit = 100, event } = req.query;
+    let logs = securityService.securityLogs;
+    
+    // Filter by event type if specified
+    if (event) {
+      logs = logs.filter(log => log.event === event);
+    }
+    
+    // Limit results
+    logs = logs.slice(0, parseInt(limit));
+    
+    res.json({
+      success: true,
+      data: logs,
+      total: logs.length
+    });
+  } catch (error) {
+    console.error('Error fetching security logs:', error);
+    res.status(500).json({ error: 'Failed to fetch security logs' });
+  }
+});
+
+// Block IP (admin only)
+app.post('/api/security/block-ip', async (req, res) => {
+  try {
+    const { ip, reason, duration } = req.body;
+    
+    if (!ip || !reason) {
+      return res.status(400).json({
+        success: false,
+        error: 'IP and reason are required'
+      });
+    }
+    
+    securityService.blockIP(ip, reason, duration || 24 * 60 * 60 * 1000);
+    
+    res.json({
+      success: true,
+      message: `IP ${ip} blocked successfully`
+    });
+  } catch (error) {
+    console.error('Error blocking IP:', error);
+    res.status(500).json({ error: 'Failed to block IP' });
+  }
+});
+
+// Unblock IP (admin only)
+app.post('/api/security/unblock-ip', async (req, res) => {
+  try {
+    const { ip } = req.body;
+    
+    if (!ip) {
+      return res.status(400).json({
+        success: false,
+        error: 'IP is required'
+      });
+    }
+    
+    securityService.blockedIPs.delete(ip);
+    securityService.logSecurityEvent('ip_unblocked', { ip });
+    
+    res.json({
+      success: true,
+      message: `IP ${ip} unblocked successfully`
+    });
+  } catch (error) {
+    console.error('Error unblocking IP:', error);
+    res.status(500).json({ error: 'Failed to unblock IP' });
+  }
+});
+
+// ==================== BACKUP MANAGEMENT ENDPOINTS ====================
+
+// Create backup
+app.post('/api/backup/create', async (req, res) => {
+  try {
+    const { type = 'manual' } = req.body;
+    
+    if (backupService.isBackupRunning) {
+      return res.status(409).json({
+        success: false,
+        error: 'Backup is already running'
+      });
+    }
+    
+    const backup = await backupService.createBackup(type);
+    
+    // Create notification
+    notificationService.createNotification('success', '🔄 Backup Created', 
+      `Backup ${backup.id} completed successfully (${backup.duration}ms)`, 
+      { backupId: backup.id, type, size: backup.size });
+    
+    res.json({
+      success: true,
+      data: backup
+    });
+  } catch (error) {
+    console.error('Error creating backup:', error);
+    res.status(500).json({ error: 'Failed to create backup' });
+  }
+});
+
+// List backups
+app.get('/api/backup/list', async (req, res) => {
+  try {
+    const backups = await backupService.listBackups();
+    
+    res.json({
+      success: true,
+      data: backups
+    });
+  } catch (error) {
+    console.error('Error listing backups:', error);
+    res.status(500).json({ error: 'Failed to list backups' });
+  }
+});
+
+// Get backup statistics
+app.get('/api/backup/stats', async (req, res) => {
+  try {
+    const stats = backupService.getBackupStats();
+    
+    res.json({
+      success: true,
+      data: stats
+    });
+  } catch (error) {
+    console.error('Error fetching backup stats:', error);
+    res.status(500).json({ error: 'Failed to fetch backup stats' });
+  }
+});
+
+// Delete backup
+app.delete('/api/backup/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    await backupService.deleteBackup(id);
+    
+    // Create notification
+    notificationService.createNotification('warning', '🗑️ Backup Deleted', 
+      `Backup ${id} has been deleted`, 
+      { backupId: id });
+    
+    res.json({
+      success: true,
+      message: `Backup ${id} deleted successfully`
+    });
+  } catch (error) {
+    console.error('Error deleting backup:', error);
+    res.status(500).json({ error: 'Failed to delete backup' });
+  }
+});
+
+// Restore from backup
+app.post('/api/backup/:id/restore', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    if (backupService.isBackupRunning) {
+      return res.status(409).json({
+        success: false,
+        error: 'Cannot restore while backup is running'
+      });
+    }
+    
+    const restore = await backupService.restoreBackup(id);
+    
+    // Create notification
+    notificationService.createNotification('success', '🔄 Backup Restored', 
+      `System restored from backup ${id}`, 
+      { backupId: id, restoredAt: restore.restoredAt });
+    
+    res.json({
+      success: true,
+      data: restore
+    });
+  } catch (error) {
+    console.error('Error restoring backup:', error);
+    res.status(500).json({ error: 'Failed to restore backup' });
+  }
+});
+
+// Export data
+app.post('/api/backup/export', async (req, res) => {
+  try {
+    const { format = 'json' } = req.body;
+    
+    const exportResult = await backupService.exportData(format);
+    
+    // Create notification
+    notificationService.createNotification('info', '📤 Data Exported', 
+      `Data exported as ${exportResult.exportId}.${format}`, 
+      { exportId: exportResult.exportId, size: exportResult.size });
+    
+    res.json({
+      success: true,
+      data: exportResult
+    });
+  } catch (error) {
+    console.error('Error exporting data:', error);
+    res.status(500).json({ error: 'Failed to export data' });
+  }
+});
+
+// Cleanup old backups
+app.post('/api/backup/cleanup', async (req, res) => {
+  try {
+    const result = await backupService.cleanupOldBackups();
+    
+    // Create notification
+    notificationService.createNotification('info', '🧹 Backup Cleanup', 
+      `Cleaned up ${result.deleted} old backups`, 
+      { deleted: result.deleted });
+    
+    res.json({
+      success: true,
+      data: result
+    });
+  } catch (error) {
+    console.error('Error cleaning up backups:', error);
+    res.status(500).json({ error: 'Failed to cleanup backups' });
+  }
+});
+
+// ==================== CUSTOMER ANALYTICS ENDPOINTS ====================
+
+// Get customer analytics
+app.get('/api/analytics/customers', async (req, res) => {
+  try {
+    const { timeRange = '30d' } = req.query;
+    
+    const analytics = await analyticsService.getCustomerAnalytics(timeRange);
+    
+    res.json({
+      success: true,
+      data: analytics
+    });
+  } catch (error) {
+    console.error('Error fetching customer analytics:', error);
+    res.status(500).json({ error: 'Failed to fetch customer analytics' });
+  }
+});
+
+// Get all customers
+app.get('/api/customers', async (req, res) => {
+  try {
+    const { getDatabase } = require('./database');
+    const db = getDatabase();
+    const collection = db.collection('customers');
+    const customers = await collection.find({}).toArray();
+    
+    res.json({
+      success: true,
+      data: customers
+    });
+  } catch (error) {
+    console.error('Error fetching customers:', error);
+    res.status(500).json({ error: 'Failed to fetch customers' });
+  }
+});
+
+// Create customer
+app.post('/api/customers', async (req, res) => {
+  try {
+    const customerData = req.body;
+    
+    const { getDatabase } = require('./database');
+    const db = getDatabase();
+    const collection = db.collection('customers');
+    
+    const customer = {
+      ...customerData,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    
+    const result = await collection.insertOne(customer);
+    
+    // Update search index
+    searchService.updateDocument('customers', result);
+    
+    // Create notification
+    notificationService.createNotification('success', '👤 New Customer Added', 
+      `Customer ${customer.name || 'Unknown'} has been added`, 
+      { customerId: result.insertedId, customerName: customer.name });
+    
+    res.json({
+      success: true,
+      data: result
+    });
+  } catch (error) {
+    console.error('Error creating customer:', error);
+    res.status(500).json({ error: 'Failed to create customer' });
+  }
+});
+
+// Update customer
+app.put('/api/customers/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updateData = req.body;
+    
+    const { getDatabase } = require('./database');
+    const db = getDatabase();
+    const collection = db.collection('customers');
+    
+    const result = await collection.updateOne(
+      { _id: id },
+      { $set: { ...updateData, updatedAt: new Date() } }
+    );
+    
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ error: 'Customer not found' });
+    }
+    
+    // Update search index
+    const updatedDoc = await collection.findOne({ _id: id });
+    searchService.updateDocument('customers', updatedDoc);
+    
+    res.json({
+      success: true,
+      data: result
+    });
+  } catch (error) {
+    console.error('Error updating customer:', error);
+    res.status(500).json({ error: 'Failed to update customer' });
+  }
+});
+
+// Delete customer
+app.delete('/api/customers/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const { getDatabase } = require('./database');
+    const db = getDatabase();
+    const collection = db.collection('customers');
+    
+    const result = await collection.deleteOne({ _id: id });
+    
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: 'Customer not found' });
+    }
+    
+    // Remove from search index
+    searchService.removeDocument('customers', id);
+    
+    res.json({
+      success: true,
+      message: 'Customer deleted successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting customer:', error);
+    res.status(500).json({ error: 'Failed to delete customer' });
+  }
+});
+
+// Get customer segments
+app.get('/api/analytics/segments', async (req, res) => {
+  try {
+    const { timeRange = '30d' } = req.query;
+    
+    const analytics = await analyticsService.getCustomerAnalytics(timeRange);
+    
+    res.json({
+      success: true,
+      data: analytics.customerSegments
+    });
+  } catch (error) {
+    console.error('Error fetching customer segments:', error);
+    res.status(500).json({ error: 'Failed to fetch customer segments' });
+  }
+});
+
+// Get top customers
+app.get('/api/analytics/top-customers', async (req, res) => {
+  try {
+    const { timeRange = '30d', limit = 10 } = req.query;
+    
+    const analytics = await analyticsService.getCustomerAnalytics(timeRange);
+    
+    res.json({
+      success: true,
+      data: analytics.topCustomers.slice(0, parseInt(limit))
+    });
+  } catch (error) {
+    console.error('Error fetching top customers:', error);
+    res.status(500).json({ error: 'Failed to fetch top customers' });
+  }
+});
+
+// Get revenue analytics
+app.get('/api/analytics/revenue', async (req, res) => {
+  try {
+    const { timeRange = '30d' } = req.query;
+    
+    const analytics = await analyticsService.getCustomerAnalytics(timeRange);
+    
+    res.json({
+      success: true,
+      data: analytics.revenueMetrics
+    });
+  } catch (error) {
+    console.error('Error fetching revenue analytics:', error);
+    res.status(500).json({ error: 'Failed to fetch revenue analytics' });
+  }
+});
+
+// Get engagement analytics
+app.get('/api/analytics/engagement', async (req, res) => {
+  try {
+    const { timeRange = '30d' } = req.query;
+    
+    const analytics = await analyticsService.getCustomerAnalytics(timeRange);
+    
+    res.json({
+      success: true,
+      data: analytics.engagementMetrics
+    });
+  } catch (error) {
+    console.error('Error fetching engagement analytics:', error);
+    res.status(500).json({ error: 'Failed to fetch engagement analytics' });
+  }
+});
+
+// Get behavior analytics
+app.get('/api/analytics/behavior', async (req, res) => {
+  try {
+    const { timeRange = '30d' } = req.query;
+    
+    const analytics = await analyticsService.getCustomerAnalytics(timeRange);
+    
+    res.json({
+      success: true,
+      data: analytics.behaviorAnalytics
+    });
+  } catch (error) {
+    console.error('Error fetching behavior analytics:', error);
+    res.status(500).json({ error: 'Failed to fetch behavior analytics' });
+  }
+});
+
+// Get geographic analytics
+app.get('/api/analytics/geographic', async (req, res) => {
+  try {
+    const { timeRange = '30d' } = req.query;
+    
+    const analytics = await analyticsService.getCustomerAnalytics(timeRange);
+    
+    res.json({
+      success: true,
+      data: analytics.geographicData
+    });
+  } catch (error) {
+    console.error('Error fetching geographic analytics:', error);
+    res.status(500).json({ error: 'Failed to fetch geographic analytics' });
+  }
+});
+
+// Get conversion analytics
+app.get('/api/analytics/conversion', async (req, res) => {
+  try {
+    const { timeRange = '30d' } = req.query;
+    
+    const analytics = await analyticsService.getCustomerAnalytics(timeRange);
+    
+    res.json({
+      success: true,
+      data: analytics.conversionMetrics
+    });
+  } catch (error) {
+    console.error('Error fetching conversion analytics:', error);
+    res.status(500).json({ error: 'Failed to fetch conversion analytics' });
+  }
+});
+
+// Get trends analytics
+app.get('/api/analytics/trends', async (req, res) => {
+  try {
+    const { timeRange = '30d' } = req.query;
+    
+    const analytics = await analyticsService.getCustomerAnalytics(timeRange);
+    
+    res.json({
+      success: true,
+      data: analytics.trends
+    });
+  } catch (error) {
+    console.error('Error fetching trends analytics:', error);
+    res.status(500).json({ error: 'Failed to fetch trends analytics' });
+  }
+});
+
+// Generate customer report
+app.post('/api/analytics/report', async (req, res) => {
+  try {
+    const { timeRange = '30d', format = 'json' } = req.body;
+    
+    const analytics = await analyticsService.getCustomerAnalytics(timeRange);
+    
+    // Create report
+    const report = {
+      generatedAt: new Date().toISOString(),
+      timeRange,
+      format,
+      analytics
+    };
+    
+    // Create notification
+    notificationService.createNotification('info', '📊 Analytics Report Generated', 
+      `Customer analytics report for ${timeRange} period`, 
+      { timeRange, format });
+    
+    res.json({
+      success: true,
+      data: report
+    });
+  } catch (error) {
+    console.error('Error generating analytics report:', error);
+    res.status(500).json({ error: 'Failed to generate analytics report' });
+  }
+});
+
+// ==================== ADVANCED SEARCH ENDPOINTS ====================
+
+// Perform advanced search
+app.post('/api/search', async (req, res) => {
+  try {
+    const { query, collections, filters, sortBy, sortOrder, limit, offset } = req.body;
+    
+    if (!query || query.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Query is required'
+      });
+    }
+    
+    const searchOptions = {
+      collections: collections || [],
+      filters: filters || {},
+      sortBy: sortBy || 'relevance',
+      sortOrder: sortOrder || 'desc',
+      limit: limit || 50,
+      offset: offset || 0
+    };
+    
+    const results = await searchService.search(query, searchOptions);
+    
+    res.json({
+      success: true,
+      data: results
+    });
+  } catch (error) {
+    console.error('Search error:', error);
+    res.status(500).json({ error: 'Search failed' });
+  }
+});
+
+// Get search suggestions
+app.get('/api/search/suggestions', async (req, res) => {
+  try {
+    const { query, limit = 10 } = req.query;
+    
+    if (!query) {
+      return res.json({
+        success: true,
+        data: []
+      });
+    }
+    
+    const suggestions = await searchService.getSuggestions(query, parseInt(limit));
+    
+    res.json({
+      success: true,
+      data: suggestions
+    });
+  } catch (error) {
+    console.error('Error getting suggestions:', error);
+    res.status(500).json({ error: 'Failed to get suggestions' });
+  }
+});
+
+// Get search statistics
+app.get('/api/search/stats', async (req, res) => {
+  try {
+    const stats = searchService.getSearchStats();
+    
+    res.json({
+      success: true,
+      data: stats
+    });
+  } catch (error) {
+    console.error('Error getting search stats:', error);
+    res.status(500).json({ error: 'Failed to get search stats' });
+  }
+});
+
+// Rebuild search index
+app.post('/api/search/rebuild', async (req, res) => {
+  try {
+    await searchService.rebuildIndex();
+    
+    // Create notification
+    notificationService.createNotification('info', '🔍 Search Index Rebuilt', 
+      'Search index has been rebuilt successfully', 
+      {});
+    
+    res.json({
+      success: true,
+      message: 'Search index rebuilt successfully'
+    });
+  } catch (error) {
+    console.error('Error rebuilding search index:', error);
+    res.status(500).json({ error: 'Failed to rebuild search index' });
+  }
+});
+
+// Get popular search terms
+app.get('/api/search/popular', async (req, res) => {
+  try {
+    const { limit = 10 } = req.query;
+    
+    const popularTerms = searchService.getPopularTerms(parseInt(limit));
+    
+    res.json({
+      success: true,
+      data: popularTerms
+    });
+  } catch (error) {
+    console.error('Error getting popular terms:', error);
+    res.status(500).json({ error: 'Failed to get popular terms' });
+  }
+});
+
+// Search by collection
+app.get('/api/search/:collection', async (req, res) => {
+  try {
+    const { collection } = req.params;
+    const { query, filters, sortBy, sortOrder, limit, offset } = req.query;
+    
+    if (!query) {
+      return res.status(400).json({
+        success: false,
+        error: 'Query is required'
+      });
+    }
+    
+    const searchOptions = {
+      collections: [collection],
+      filters: filters ? JSON.parse(filters) : {},
+      sortBy: sortBy || 'relevance',
+      sortOrder: sortOrder || 'desc',
+      limit: parseInt(limit) || 50,
+      offset: parseInt(offset) || 0
+    };
+    
+    const results = await searchService.search(query, searchOptions);
+    
+    res.json({
+      success: true,
+      data: results
+    });
+  } catch (error) {
+    console.error('Collection search error:', error);
+    res.status(500).json({ error: 'Search failed' });
+  }
+});
+
+// ==================== DATA EXPORT ENDPOINTS ====================
+
+// Export data from collection
+app.post('/api/export/:collection', async (req, res) => {
+  try {
+    const { collection } = req.params;
+    const { format = 'json', filters = {}, options = {} } = req.body;
+    
+    const result = await exportService.exportData(collection, format, filters, options);
+    
+    // Create notification
+    notificationService.createNotification('success', '📊 Data Exported', 
+      `Data exported from ${collection} as ${format}`, 
+      { collection, format, filename: result.filename });
+    
+    res.json({
+      success: true,
+      data: result
+    });
+  } catch (error) {
+    console.error('Export error:', error);
+    res.status(500).json({ error: 'Export failed' });
+  }
+});
+
+// Generate report
+app.post('/api/reports/:reportType', async (req, res) => {
+  try {
+    const { reportType } = req.params;
+    const { timeRange = '30d', format = 'json' } = req.body;
+    
+    const result = await exportService.generateReport(reportType, timeRange, format);
+    
+    // Create notification
+    notificationService.createNotification('success', '📈 Report Generated', 
+      `${reportType} report generated for ${timeRange} period`, 
+      { reportType, timeRange, format, filename: result.filename });
+    
+    res.json({
+      success: true,
+      data: result
+    });
+  } catch (error) {
+    console.error('Report generation error:', error);
+    res.status(500).json({ error: 'Report generation failed' });
+  }
+});
+
+// Get list of exports
+app.get('/api/exports', async (req, res) => {
+  try {
+    const exports = await exportService.getExports();
+    
+    res.json({
+      success: true,
+      data: exports
+    });
+  } catch (error) {
+    console.error('Error getting exports:', error);
+    res.status(500).json({ error: 'Failed to get exports' });
+  }
+});
+
+// Delete export
+app.delete('/api/exports/:filename', async (req, res) => {
+  try {
+    const { filename } = req.params;
+    
+    const result = await exportService.deleteExport(filename);
+    
+    // Create notification
+    notificationService.createNotification('info', '🗑️ Export Deleted', 
+      `Export ${filename} has been deleted`, 
+      { filename });
+    
+    res.json({
+      success: true,
+      data: result
+    });
+  } catch (error) {
+    console.error('Error deleting export:', error);
+    res.status(500).json({ error: 'Failed to delete export' });
+  }
+});
+
+// Get export statistics
+app.get('/api/exports/stats', async (req, res) => {
+  try {
+    const stats = exportService.getExportStats();
+    
+    res.json({
+      success: true,
+      data: stats
+    });
+  } catch (error) {
+    console.error('Error getting export stats:', error);
+    res.status(500).json({ error: 'Failed to get export stats' });
+  }
+});
+
+// Clean up old exports
+app.post('/api/exports/cleanup', async (req, res) => {
+  try {
+    const { daysOld = 30 } = req.body;
+    
+    const result = await exportService.cleanupOldExports(daysOld);
+    
+    // Create notification
+    notificationService.createNotification('info', '🧹 Exports Cleaned Up', 
+      `Cleaned up ${result.deletedCount} old exports`, 
+      { deletedCount: result.deletedCount });
+    
+    res.json({
+      success: true,
+      data: result
+    });
+  } catch (error) {
+    console.error('Error cleaning up exports:', error);
+    res.status(500).json({ error: 'Failed to cleanup exports' });
+  }
+});
+
+// Download export file
+app.get('/api/exports/download/:filename', async (req, res) => {
+  try {
+    const { filename } = req.params;
+    const filePath = path.join('./exports', filename);
+    
+    // Check if file exists
+    try {
+      await fsPromises.access(filePath);
+    } catch (error) {
+      return res.status(404).json({ error: 'Export file not found' });
+    }
+    
+    // Get file stats
+    const stats = await fsPromises.stat(filePath);
+    
+    // Set headers for download
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Length', stats.size);
+    
+    // Send file
+    const fileStream = fs.createReadStream(filePath);
+    fileStream.pipe(res);
+    
+  } catch (error) {
+    console.error('Error downloading export:', error);
+    res.status(500).json({ error: 'Failed to download export' });
+  }
+});
+
+// ==================== INTERNATIONALIZATION ENDPOINTS ====================
+
+// Get supported languages
+app.get('/api/i18n/languages', (req, res) => {
+  try {
+    const languages = i18nService.getSupportedLanguages();
+    
+    res.json({
+      success: true,
+      data: languages
+    });
+  } catch (error) {
+    console.error('Error getting languages:', error);
+    res.status(500).json({ error: 'Failed to get languages' });
+  }
+});
+
+// Set user language preference
+app.post('/api/i18n/language', async (req, res) => {
+  try {
+    const { userId, language } = req.body;
+    
+    if (!userId || !language) {
+      return res.status(400).json({
+        success: false,
+        error: 'User ID and language are required'
+      });
+    }
+    
+    const success = i18nService.setUserLanguage(userId, language);
+    
+    if (success) {
+      res.json({
+        success: true,
+        message: 'Language preference updated successfully'
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        error: 'Unsupported language'
+      });
+    }
+  } catch (error) {
+    console.error('Error setting language:', error);
+    res.status(500).json({ error: 'Failed to set language' });
+  }
+});
+
+// Get user language preference
+app.get('/api/i18n/language/:userId', (req, res) => {
+  try {
+    const { userId } = req.params;
+    const language = i18nService.getUserLanguage(userId);
+    
+    res.json({
+      success: true,
+      data: {
+        userId,
+        language
+      }
+    });
+  } catch (error) {
+    console.error('Error getting user language:', error);
+    res.status(500).json({ error: 'Failed to get user language' });
+  }
+});
+
+// Translate text
+app.post('/api/i18n/translate', (req, res) => {
+  try {
+    const { key, language, params = {} } = req.body;
+    
+    if (!key) {
+      return res.status(400).json({
+        success: false,
+        error: 'Translation key is required'
+      });
+    }
+    
+    const translation = i18nService.translate(key, language, params);
+    
+    res.json({
+      success: true,
+      data: {
+        key,
+        language,
+        translation
+      }
+    });
+  } catch (error) {
+    console.error('Error translating text:', error);
+    res.status(500).json({ error: 'Translation failed' });
+  }
+});
+
+// Detect language from text
+app.post('/api/i18n/detect', (req, res) => {
+  try {
+    const { text } = req.body;
+    
+    if (!text) {
+      return res.status(400).json({
+        success: false,
+        error: 'Text is required'
+      });
+    }
+    
+    const detectedLanguage = i18nService.detectLanguage(text);
+    
+    res.json({
+      success: true,
+      data: {
+        text: text.substring(0, 100) + (text.length > 100 ? '...' : ''),
+        detectedLanguage,
+        languageName: i18nService.getLanguageName(detectedLanguage),
+        nativeLanguageName: i18nService.getNativeLanguageName(detectedLanguage)
+      }
+    });
+  } catch (error) {
+    console.error('Error detecting language:', error);
+    res.status(500).json({ error: 'Language detection failed' });
+  }
+});
+
+// Get bot response in specific language
+app.post('/api/i18n/bot-response', (req, res) => {
+  try {
+    const { type, language, params = {} } = req.body;
+    
+    if (!type) {
+      return res.status(400).json({
+        success: false,
+        error: 'Response type is required'
+      });
+    }
+    
+    const response = i18nService.getBotResponse(type, language, params);
+    
+    res.json({
+      success: true,
+      data: {
+        type,
+        language,
+        response
+      }
+    });
+  } catch (error) {
+    console.error('Error getting bot response:', error);
+    res.status(500).json({ error: 'Failed to get bot response' });
+  }
+});
+
+// Format currency
+app.post('/api/i18n/format-currency', (req, res) => {
+  try {
+    const { amount, language } = req.body;
+    
+    if (amount === undefined) {
+      return res.status(400).json({
+        success: false,
+        error: 'Amount is required'
+      });
+    }
+    
+    const formattedCurrency = i18nService.formatCurrency(amount, language);
+    
+    res.json({
+      success: true,
+      data: {
+        amount,
+        language,
+        formattedCurrency
+      }
+    });
+  } catch (error) {
+    console.error('Error formatting currency:', error);
+    res.status(500).json({ error: 'Currency formatting failed' });
+  }
+});
+
+// Format date
+app.post('/api/i18n/format-date', (req, res) => {
+  try {
+    const { date, language } = req.body;
+    
+    if (!date) {
+      return res.status(400).json({
+        success: false,
+        error: 'Date is required'
+      });
+    }
+    
+    const formattedDate = i18nService.formatDate(new Date(date), language);
+    
+    res.json({
+      success: true,
+      data: {
+        date,
+        language,
+        formattedDate
+      }
+    });
+  } catch (error) {
+    console.error('Error formatting date:', error);
+    res.status(500).json({ error: 'Date formatting failed' });
+  }
+});
+
+// Get localized messages
+app.get('/api/i18n/messages/:type', (req, res) => {
+  try {
+    const { type } = req.params;
+    const language = req.query.language || req.language || 'en';
+    
+    let messages;
+    
+    switch (type) {
+      case 'validation':
+        messages = {
+          required: i18nService.getValidationMessage('required', language),
+          email: i18nService.getValidationMessage('email', language),
+          phone: i18nService.getValidationMessage('phone', language),
+          amount: i18nService.getValidationMessage('amount', language)
+        };
+        break;
+      case 'success':
+        messages = {
+          operation: i18nService.getSuccessMessage('operation', language),
+          saved: i18nService.getSuccessMessage('saved', language),
+          updated: i18nService.getSuccessMessage('updated', language),
+          deleted: i18nService.getSuccessMessage('deleted', language)
+        };
+        break;
+      case 'error':
+        messages = {
+          general: i18nService.getErrorMessage('general', language),
+          input: i18nService.getErrorMessage('input', language),
+          notFound: i18nService.getErrorMessage('notFound', language),
+          unauthorized: i18nService.getErrorMessage('unauthorized', language)
+        };
+        break;
+      case 'status':
+        messages = {
+          pending: i18nService.getStatusText('pending', language),
+          approved: i18nService.getStatusText('approved', language),
+          completed: i18nService.getStatusText('completed', language),
+          cancelled: i18nService.getStatusText('cancelled', language)
+        };
+        break;
+      case 'navigation':
+        messages = {
+          dashboard: i18nService.getNavigationText('dashboard', language),
+          customers: i18nService.getNavigationText('customers', language),
+          orders: i18nService.getNavigationText('orders', language),
+          analytics: i18nService.getNavigationText('analytics', language)
+        };
+        break;
+      default:
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid message type'
+        });
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        type,
+        language,
+        messages
+      }
+    });
+  } catch (error) {
+    console.error('Error getting messages:', error);
+    res.status(500).json({ error: 'Failed to get messages' });
   }
 });
 
@@ -3502,6 +4908,46 @@ async function startServer() {
     process.exit(1);
   }
 }
+
+// Graceful shutdown handlers
+const gracefulShutdown = async (signal) => {
+  console.log(`\n🛑 Received ${signal}. Starting graceful shutdown...`);
+  
+  try {
+    // Close database connection
+    await database.closeDatabase();
+    console.log('✅ Database connection closed');
+    
+    // Close HTTP server
+    if (server) {
+      server.close(() => {
+        console.log('✅ HTTP server closed');
+      });
+    }
+    
+    console.log('👋 Graceful shutdown completed');
+    process.exit(0);
+  } catch (error) {
+    console.error('❌ Error during graceful shutdown:', error);
+    process.exit(1);
+  }
+};
+
+// Handle shutdown signals
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('💥 Uncaught Exception:', error);
+  gracefulShutdown('uncaughtException');
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('💥 Unhandled Rejection at:', promise, 'reason:', reason);
+  gracefulShutdown('unhandledRejection');
+});
 
 module.exports = app;
 

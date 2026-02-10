@@ -149,6 +149,18 @@ class WebSocketService {
       this.emit('approval_updated', data);
     });
 
+    this.socket.on('approval.created', (data) => {
+      this.emit('approval_created', data);
+    });
+
+    this.socket.on('order.created', (data) => {
+      this.emit('order_created', data);
+    });
+
+    this.socket.on('conversation.updated', (data) => {
+      this.emit('conversation_updated', data);
+    });
+
     this.socket.on('new_message', (data) => {
       this.emit('new_message', data);
     });
@@ -159,6 +171,10 @@ class WebSocketService {
 
     this.socket.on('new_approval', (data) => {
       this.emit('new_approval', data);
+    });
+
+    this.socket.on('debug.event', (data) => {
+      this.emit('debug_event', data);
     });
   }
 
@@ -203,7 +219,7 @@ class WebSocketService {
 
 // API Service
 export class ApiService {
-  private wsService = new WebSocketService();
+  public wsService = new WebSocketService();
 
   // Initialize WebSocket connection
   async initializeWebSocket(): Promise<void> {
@@ -218,6 +234,22 @@ export class ApiService {
   // WebSocket event listeners
   onApprovalUpdate(callback: (data: { id: string; status: string; resolvedBy: string }) => void) {
     this.wsService.on('approval_updated', callback);
+  }
+
+  onApprovalCreated(callback: (data: any) => void) {
+    this.wsService.on('approval_created', callback);
+  }
+
+  onOrderCreated(callback: (data: any) => void) {
+    this.wsService.on('order_created', callback);
+  }
+
+  onConversationUpdated(callback: (data: any) => void) {
+    this.wsService.on('conversation_updated', callback);
+  }
+
+  onDebugEvent(callback: (data: any) => void) {
+    this.wsService.on('debug_event', callback);
   }
 
   onNewMessage(callback: (data: any) => void) {
@@ -355,7 +387,7 @@ export class ApiService {
   }
 
   static async directCommand(command: string, platform: string = 'web', userId?: string): Promise<any> {
-    const response = await fetch(`${API_BASE_URL}/api/direct-command`, {
+    const response = await fetch(`${API_BASE_URL}//api/direct-command`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -639,6 +671,229 @@ export class ApiService {
   // Cleanup
   disconnect() {
     this.wsService.disconnect();
+  }
+
+  // Notification API methods
+  async getNotifications(userId?: string, limit: number = 50, unreadOnly: boolean = false): Promise<any> {
+    const params = new URLSearchParams();
+    if (userId) params.append('userId', userId);
+    params.append('limit', limit.toString());
+    if (unreadOnly) params.append('unreadOnly', 'true');
+    
+    const response = await fetch(`${API_BASE_URL}/api/notifications?${params}`);
+    if (!response.ok) throw new Error('Failed to fetch notifications');
+    return response.json();
+  }
+
+  async getUnreadNotificationsCount(userId?: string): Promise<number> {
+    const params = userId ? `?userId=${userId}` : '';
+    const response = await fetch(`${API_BASE_URL}/api/notifications/unread-count${params}`);
+    if (!response.ok) throw new Error('Failed to fetch unread count');
+    const result = await response.json();
+    return result.unreadCount;
+  }
+
+  async markNotificationAsRead(notificationId: string, userId?: string): Promise<void> {
+    const response = await fetch(`${API_BASE_URL}/api/notifications/${notificationId}/read`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: userId || 'system' })
+    });
+    if (!response.ok) throw new Error('Failed to mark notification as read');
+  }
+
+  async markAllNotificationsAsRead(userId?: string): Promise<void> {
+    const response = await fetch(`${API_BASE_URL}/api/notifications/read-all`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: userId || 'system' })
+    });
+    if (!response.ok) throw new Error('Failed to mark all notifications as read');
+  }
+
+  async deleteNotification(notificationId: string, userId?: string): Promise<void> {
+    const params = userId ? `?userId=${userId}` : '';
+    const response = await fetch(`${API_BASE_URL}/api/notifications/${notificationId}${params}`, {
+      method: 'DELETE'
+    });
+    if (!response.ok) throw new Error('Failed to delete notification');
+  }
+
+  async getNotificationStats(): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/api/notifications/stats`);
+    if (!response.ok) throw new Error('Failed to fetch notification stats');
+    const result = await response.json();
+    return result.data;
+  }
+
+  async createNotification(type: string, title: string, message: string, data: any = {}, priority: string = 'normal'): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/api/notifications`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type, title, message, data, priority })
+    });
+    if (!response.ok) throw new Error('Failed to create notification');
+    const result = await response.json();
+    return result.data;
+  }
+
+  // Analytics API methods
+  async getCustomerAnalytics(timeRange: string = '30d'): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/api/analytics/customers?timeRange=${timeRange}`);
+    if (!response.ok) throw new Error('Failed to fetch customer analytics');
+    const result = await response.json();
+    return result.data;
+  }
+
+  async getCustomerSegments(timeRange: string = '30d'): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/api/analytics/segments?timeRange=${timeRange}`);
+    if (!response.ok) throw new Error('Failed to fetch customer segments');
+    const result = await response.json();
+    return result.data;
+  }
+
+  async getTopCustomers(timeRange: string = '30d', limit: number = 10): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/api/analytics/top-customers?timeRange=${timeRange}&limit=${limit}`);
+    if (!response.ok) throw new Error('Failed to fetch top customers');
+    const result = await response.json();
+    return result.data;
+  }
+
+  async getRevenueAnalytics(timeRange: string = '30d'): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/api/analytics/revenue?timeRange=${timeRange}`);
+    if (!response.ok) throw new Error('Failed to fetch revenue analytics');
+    const result = await response.json();
+    return result.data;
+  }
+
+  async getEngagementAnalytics(timeRange: string = '30d'): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/api/analytics/engagement?timeRange=${timeRange}`);
+    if (!response.ok) throw new Error('Failed to fetch engagement analytics');
+    const result = await response.json();
+    return result.data;
+  }
+
+  async getBehaviorAnalytics(timeRange: string = '30d'): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/api/analytics/behavior?timeRange=${timeRange}`);
+    if (!response.ok) throw new Error('Failed to fetch behavior analytics');
+    const result = await response.json();
+    return result.data;
+  }
+
+  async getGeographicAnalytics(timeRange: string = '30d'): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/api/analytics/geographic?timeRange=${timeRange}`);
+    if (!response.ok) throw new Error('Failed to fetch geographic analytics');
+    const result = await response.json();
+    return result.data;
+  }
+
+  async getConversionAnalytics(timeRange: string = '30d'): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/api/analytics/conversion?timeRange=${timeRange}`);
+    if (!response.ok) throw new Error('Failed to fetch conversion analytics');
+    const result = await response.json();
+    return result.data;
+  }
+
+  async getTrendsAnalytics(timeRange: string = '30d'): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/api/analytics/trends?timeRange=${timeRange}`);
+    if (!response.ok) throw new Error('Failed to fetch trends analytics');
+    const result = await response.json();
+    return result.data;
+  }
+
+  async generateAnalyticsReport(timeRange: string = '30d', format: string = 'json'): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/api/analytics/report`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ timeRange, format })
+    });
+    if (!response.ok) throw new Error('Failed to generate analytics report');
+    const result = await response.json();
+    return result.data;
+  }
+
+  // Search API methods
+  async performSearch(searchParams: {
+    query: string;
+    collections?: string[];
+    filters?: any;
+    sortBy?: string;
+    sortOrder?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/api/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(searchParams)
+    });
+    if (!response.ok) throw new Error('Search failed');
+    const result = await response.json();
+    return result.data;
+  }
+
+  async getSearchSuggestions(query: string, limit: number = 10): Promise<string[]> {
+    const response = await fetch(`${API_BASE_URL}/api/search/suggestions?query=${encodeURIComponent(query)}&limit=${limit}`);
+    if (!response.ok) throw new Error('Failed to get search suggestions');
+    const result = await response.json();
+    return result.data;
+  }
+
+  async getSearchStats(): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/api/search/stats`);
+    if (!response.ok) throw new Error('Failed to get search stats');
+    const result = await response.json();
+    return result.data;
+  }
+
+  async rebuildSearchIndex(): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/api/search/rebuild`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    if (!response.ok) throw new Error('Failed to rebuild search index');
+    const result = await response.json();
+    return result;
+  }
+
+  async getPopularSearchTerms(limit: number = 10): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/api/search/popular?limit=${limit}`);
+    if (!response.ok) throw new Error('Failed to get popular search terms');
+    const result = await response.json();
+    return result.data;
+  }
+
+  async searchByCollection(collection: string, params: {
+    query: string;
+    filters?: any;
+    sortBy?: string;
+    sortOrder?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<any> {
+    const queryParams = new URLSearchParams();
+    queryParams.append('query', params.query);
+    
+    if (params.filters) {
+      queryParams.append('filters', JSON.stringify(params.filters));
+    }
+    if (params.sortBy) {
+      queryParams.append('sortBy', params.sortBy);
+    }
+    if (params.sortOrder) {
+      queryParams.append('sortOrder', params.sortOrder);
+    }
+    if (params.limit) {
+      queryParams.append('limit', params.limit.toString());
+    }
+    if (params.offset) {
+      queryParams.append('offset', params.offset.toString());
+    }
+    
+    const response = await fetch(`${API_BASE_URL}/api/search/${collection}?${queryParams}`);
+    if (!response.ok) throw new Error('Collection search failed');
+    const result = await response.json();
+    return result.data;
   }
 }
 

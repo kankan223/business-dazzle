@@ -1,0 +1,35 @@
+{
+  "metadata": {
+    "collection": "customers",
+    "exportedAt": "2026-02-10T15:12:20.615Z",
+    "recordCount": 3,
+    "format": "json"
+  },
+  "data": [
+    {
+      "phone": "5934951555",
+      "createdAt": "2026-02-04T20:03:56.293Z",
+      "language": "en",
+      "lastSeen": "2026-02-05T08:35:51.254Z",
+      "name": "kenya Brok",
+      "platform": "telegram"
+    },
+    {
+      "phone": "telegram-5934951555",
+      "createdAt": "2026-02-05T08:59:53.659Z",
+      "language": "en",
+      "lastSeen": "2026-02-05T10:29:23.432Z",
+      "name": "kenya Brok",
+      "platform": "telegram"
+    },
+    {
+      "name": "John Doe",
+      "email": "john@example.com",
+      "phone": "9876543210",
+      "platform": "telegram",
+      "status": "active",
+      "createdAt": "2026-02-10T15:07:34.297Z",
+      "updatedAt": "2026-02-10T15:07:34.297Z"
+    }
+  ]
+}

@@ -96,7 +96,10 @@ Respond with JSON only.`
         });
         
         // Test the model with a simple request
-        await this.model.generateContent('test');
+        const result = await Promise.race([
+          this.model.generateContent('test'),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 10000) ) // 10 second timeout
+        ]);
         
         this.currentModelIndex = i;
         console.log(`✅ Successfully initialized model: ${modelName}`);
@@ -180,20 +183,26 @@ Respond with JSON only.`
     }
   }
 
-  // Process customer message and generate structured response
-  async processCustomerMessage(message, customerContext, conversationHistory) {
-    return await this.retryWithBackoff(async () => {
-      try {
-        // Get available model with fallback
-        let model;
+  // Process customer message with structured response
+  async processCustomerMessage(message, customerContext = null, conversationHistory = null) {
+    try {
+      console.log('🤖 Processing AI request:', {
+        message: message.substring(0, 100) + (message.length > 100 ? '...' : ''),
+        hasContext: !!customerContext,
+        historyLength: conversationHistory?.length || 0
+      });
+
+      if (!this.model) {
+        console.warn('⚠️ AI model not initialized, attempting to reinitialize...');
         try {
           model = await this.getAvailableModel();
         } catch (error) {
           console.warn('AI models unavailable, using fallback:', error.message);
           return this.getFallbackStructuredResponse(message);
         }
+      }
 
-        const prompt = `${this.config.systemPrompt}
+      const prompt = `${this.config.systemPrompt}
 
 Customer Message: "${message}"
 Context: ${JSON.stringify(customerContext || {})}
@@ -201,82 +210,131 @@ History: ${JSON.stringify((conversationHistory || []).slice(-3))}
 
 Respond with JSON only.`;
 
-        const result = await model.generateContent(prompt);
-        const responseText = result.response.text().trim();
-        
-        // Parse JSON response
-        let structuredResponse;
-        try {
-          // Extract JSON from response (handle potential extra text)
-          const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-          if (jsonMatch) {
-            structuredResponse = JSON.parse(jsonMatch[0]);
-          } else {
-            structuredResponse = JSON.parse(responseText);
-          }
-        } catch (parseError) {
-          console.error('Failed to parse AI JSON response:', parseError.message);
-          console.error('Raw response:', responseText);
-          return this.getFallbackStructuredResponse(message);
+      const result = await model.generateContent(prompt);
+      const responseText = result.response.text().trim();
+      
+      console.log('📝 AI Raw Response:', responseText.substring(0, 200) + (responseText.length > 200 ? '...' : ''));
+      
+      // Parse JSON response
+      let structuredResponse;
+      try {
+        // Extract JSON from response (handle potential extra text)
+        const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          structuredResponse = JSON.parse(jsonMatch[0]);
+        } else {
+          structuredResponse = JSON.parse(responseText);
         }
-
-        // Validate required fields
-        const validatedResponse = this.validateStructuredResponse(structuredResponse, message);
-        
-        return validatedResponse;
-
-      } catch (error) {
-        console.error('AI processing error:', error);
-        
-        // If it's a model error, try to reinitialize
-        if (error.message.includes('model') || error.message.includes('API')) {
-          console.log('🔄 Reinitializing AI models due to error...');
-          await this.initializeModelWithFallback();
-        }
-        
+      } catch (parseError) {
+        console.error('❌ Failed to parse AI JSON response:', parseError.message);
+        console.error('📄 Raw response:', responseText);
         return this.getFallbackStructuredResponse(message);
       }
-    }, 'processCustomerMessage');
+
+      // Validate required fields
+      const validatedResponse = this.validateStructuredResponse(structuredResponse, message);
+      
+      console.log('✅ AI Processing Complete:', {
+        intent: validatedResponse.intent,
+        confidence: validatedResponse.confidence,
+        requiresApproval: validatedResponse.requiresApproval
+      });
+      
+      return validatedResponse;
+
+    } catch (error) {
+      console.error('💥 AI processing error:', {
+        message: error.message,
+        stack: error.stack?.substring(0, 200)
+      });
+      
+      // If it's a model error, try to reinitialize
+      if (error.message.includes('model') || error.message.includes('API')) {
+        console.log('🔄 Reinitializing AI models due to error...');
+        await this.initializeModelWithFallback();
+      }
+      
+      return this.getFallbackStructuredResponse(message);
+    }
   }
 
   // Validate structured response has required fields
   validateStructuredResponse(response, originalMessage) {
-    const defaults = {
-      intent: 'general_query',
-      entities: { products: [], amounts: [], people: [], quantities: [] },
-      language: 'en',
-      confidence: 0.5,
-      requiresApproval: false,
-      proposedAction: 'respond_to_query'
-    };
+    try {
+      const defaults = {
+        intent: 'general_query',
+        entities: { products: [], amounts: [], people: [], quantities: [] },
+        language: 'en',
+        confidence: 0.5,
+        requiresApproval: false,
+        proposedAction: 'respond_to_query'
+      };
 
-    // Merge with defaults for missing fields
-    const validated = {
-      ...defaults,
-      ...response
-    };
+      // Merge with defaults for missing fields
+      const validated = {
+        ...defaults,
+        ...response
+      };
 
-    // Ensure confidence is within bounds
-    if (typeof validated.confidence !== 'number' || validated.confidence < 0 || validated.confidence > 1) {
-      validated.confidence = 0.5;
+      // Validate intent is a string
+      if (typeof validated.intent !== 'string' || !validated.intent.trim()) {
+        console.warn('Invalid intent detected, using default:', validated.intent);
+        validated.intent = defaults.intent;
+      }
+
+      // Validate entities is an object
+      if (typeof validated.entities !== 'object' || validated.entities === null) {
+        console.warn('Invalid entities detected, using defaults');
+        validated.entities = defaults.entities;
+      }
+
+      // Ensure entities have required arrays
+      ['products', 'amounts', 'people', 'quantities'].forEach(key => {
+        if (!Array.isArray(validated.entities[key])) {
+          console.warn(`Invalid entities.${key}, using empty array`);
+          validated.entities[key] = [];
+        }
+      });
+
+      // Ensure confidence is within bounds
+      if (typeof validated.confidence !== 'number' || validated.confidence < 0 || validated.confidence > 1) {
+        console.warn('Invalid confidence detected, normalizing to 0.5:', validated.confidence);
+        validated.confidence = 0.5;
+      }
+
+      // Auto-require approval for certain conditions
+      if (validated.confidence < 0.6) {
+        validated.requiresApproval = true;
+        validated.proposedAction = 'ask_clarification';
+      }
+
+      // Check for high-value operations
+      const hasHighAmount = validated.entities.amounts?.some(amount => amount > 1000);
+      const isRefundIntent = validated.intent === 'refund' || validated.proposedAction?.includes('refund');
+      const isDataExport = validated.intent === 'data_export' || validated.proposedAction?.includes('export');
+
+      if (hasHighAmount || isRefundIntent || isDataExport) {
+        validated.requiresApproval = true;
+      }
+
+      // Log validation for debugging
+      console.log('🔍 AI Response Validation:', {
+        intent: validated.intent,
+        confidence: validated.confidence,
+        requiresApproval: validated.requiresApproval,
+        entitiesCount: {
+          products: validated.entities.products?.length || 0,
+          amounts: validated.entities.amounts?.length || 0,
+          people: validated.entities.people?.length || 0,
+          quantities: validated.entities.quantities?.length || 0
+        }
+      });
+
+      return validated;
+    } catch (error) {
+      console.error('❌ Error in validateStructuredResponse:', error);
+      return this.getFallbackStructuredResponse(originalMessage);
     }
-
-    // Auto-require approval for certain conditions
-    if (validated.confidence < 0.6) {
-      validated.requiresApproval = true;
-      validated.proposedAction = 'ask_clarification';
-    }
-
-    // Check for high-value operations
-    const hasHighAmount = validated.entities.amounts?.some(amount => amount > 1000);
-    const isRefundIntent = validated.intent === 'refund' || validated.proposedAction?.includes('refund');
-    const isDataExport = validated.intent === 'data_export' || validated.proposedAction?.includes('export');
-
-    if (hasHighAmount || isRefundIntent || isDataExport) {
-      validated.requiresApproval = true;
-    }
-
-    return validated;
   }
 
   // Fallback structured response when AI fails

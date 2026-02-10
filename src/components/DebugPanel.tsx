@@ -60,10 +60,10 @@ export function DebugPanel() {
         setIsConnected(false);
       };
 
-      eventSource.onclose = () => {
+      eventSource.addEventListener("close", () => {
         setIsConnected(false);
         console.log('🧪 Debug stream disconnected');
-      };
+      });
     };
 
     connectStream();
@@ -120,12 +120,16 @@ export function DebugPanel() {
     }
   };
 
-  const formatTimestamp = (timestamp: string) => {
+  const formatTimestamp = (timestamp: string | undefined) => {
+    if (!timestamp) return 'N/A';
     return new Date(timestamp).toLocaleString('en-IN', {
       hour12: true,
       hour: '2-digit',
       minute: '2-digit',
-      second: '2-digit'
+      second: '2-digit',
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric'
     });
   };
 

@@ -1,0 +1,32 @@
+{
+  "id": "backup_1770734012221_f9cad89b",
+  "type": "manual",
+  "timestamp": "2026-02-10T14:33:32.281Z",
+  "startTime": "2026-02-10T14:33:32.221Z",
+  "endTime": "2026-02-10T14:33:32.281Z",
+  "duration": 60,
+  "components": {
+    "mongodb": {
+      "success": false,
+      "error": "Command failed: mongodump --uri=\"mongodb://localhost:27017/bharat_biz_agent\" --out=\"backups/backup_1770734012221_f9cad89b/mongodb\"\n/bin/sh: line 1: mongodump: command not found\n"
+    },
+    "configuration": {
+      "success": true,
+      "path": "backups/backup_1770734012221_f9cad89b/config",
+      "files": [
+        ".env",
+        "package.json",
+        "package-lock.json"
+      ]
+    },
+    "logs": {
+      "success": true,
+      "path": "backups/backup_1770734012221_f9cad89b/logs",
+      "files": [
+        "server.log"
+      ]
+    }
+  },
+  "size": 326649,
+  "status": "success"
+}
