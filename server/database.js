@@ -469,12 +469,74 @@ const BotOperations = {
     return await db.collection(COLLECTIONS.BOTS).find({}).toArray();
   },
   
-  // Get bot by ID
-  async getById(botId) {
-    return await db.collection(COLLECTIONS.BOTS).findOne({ botId });
+  // Get bot by botId (alias for getById for compatibility)
+  async getByBotId(botId) {
+    return await this.getById(botId);
   },
-  
-  // Update bot status
+
+  // Create new bot
+  async create(botData) {
+    try {
+      const botId = `BOT-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+      const newBot = {
+        botId,
+        name: botData.name || 'New Bot',
+        platform: botData.platform || 'telegram',
+        status: botData.status || 'active',
+        config: botData.config || {},
+        settings: botData.settings || {},
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        lastActive: new Date().toISOString(),
+        metrics: {
+          messagesProcessed: 0,
+          ordersCreated: 0,
+          conversations: 0
+        }
+      };
+      
+      const result = await db.collection(COLLECTIONS.BOTS).insertOne(newBot);
+      console.log(`✅ Bot created: ${botId}`);
+      return { ...newBot, _id: result.insertedId };
+    } catch (error) {
+      console.error('Error creating bot:', error);
+      throw error;
+    }
+  },
+
+  // Update bot
+  async update(botId, updateData) {
+    try {
+      const updates = {
+        ...updateData,
+        updatedAt: new Date().toISOString()
+      };
+      
+      const result = await db.collection(COLLECTIONS.BOTS).findOneAndUpdate(
+        { botId },
+        { $set: updates },
+        { returnDocument: 'after' }
+      );
+      
+      console.log(`✅ Bot updated: ${botId}`);
+      return result;
+    } catch (error) {
+      console.error('Error updating bot:', error);
+      throw error;
+    }
+  },
+
+  // Delete bot
+  async delete(botId) {
+    try {
+      await db.collection(COLLECTIONS.BOTS).deleteOne({ botId });
+      console.log(`✅ Bot deleted: ${botId}`);
+      return { success: true };
+    } catch (error) {
+      console.error('Error deleting bot:', error);
+      throw error;
+    }
+  },
   async updateStatus(botId, status) {
     return await db.collection(COLLECTIONS.BOTS).updateOne(
       { botId },
@@ -504,167 +566,558 @@ const BotOperations = {
   }
 };
 
+// Conversation Operations - Production-Grade with User Identity
 const ConversationOperations = {
-  // Get all conversations
-  async getAll() {
-    return await db.collection(COLLECTIONS.CONVERSATIONS)
-      .find({})
-      .sort({ lastMessageAt: -1 })
-      .toArray();
+  // Generate unique conversation ID: CONV-XXXX (8 chars)
+  generateConversationId() {
+    return `CONV-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
   },
-  
-  // Get conversation by customer ID
-  async getByCustomerId(customerId) {
-    return await db.collection(COLLECTIONS.CONVERSATIONS)
-      .find({ customerId })
-      .sort({ lastMessageAt: -1 })
-      .toArray();
-  },
-  
-  // Create or update conversation
-  async upsert(conversation) {
-    const { customerId, botId } = conversation;
-    
-    return await db.collection(COLLECTIONS.CONVERSATIONS).updateOne(
-      { customerId, botId },
-      {
-        $set: {
-          ...conversation,
-          lastMessageAt: new Date()
-        },
-        $setOnInsert: {
-          createdAt: new Date()
-        }
-      },
-      { upsert: true }
-    );
-  },
-  
-  // Add message to conversation
-  async addMessage(customerId, botId, message) {
-    return await db.collection(COLLECTIONS.CONVERSATIONS).updateOne(
-      { customerId, botId },
-      {
-        $push: {
-          messages: {
-            ...message,
-            timestamp: new Date()
-          }
-        },
-        $set: {
-          lastMessageAt: new Date()
+
+  // Get all conversations with user lookup
+  async getAll(limit = 100, offset = 0) {
+    try {
+      const conversations = await db.collection(COLLECTIONS.CONVERSATIONS)
+        .find({})
+        .sort({ lastMessageAt: -1 })
+        .skip(offset)
+        .limit(limit)
+        .toArray();
+      
+      // Enrich with user data
+      for (const conv of conversations) {
+        if (conv.userId) {
+          conv.user = await UserOperations.getByUserId(conv.userId);
         }
       }
-    );
+      
+      return conversations;
+    } catch (error) {
+      console.error('Error getting all conversations:', error);
+      throw error;
+    }
+  },
+
+  // Get conversation by userId (replaces getByCustomerId)
+  async getByUserId(userId) {
+    try {
+      return await db.collection(COLLECTIONS.CONVERSATIONS)
+        .find({ userId })
+        .sort({ lastMessageAt: -1 })
+        .toArray();
+    } catch (error) {
+      console.error('Error getting conversations by userId:', error);
+      throw error;
+    }
+  },
+
+  // Get conversation by conversationId
+  async getByConversationId(conversationId) {
+    try {
+      return await db.collection(COLLECTIONS.CONVERSATIONS)
+        .findOne({ conversationId });
+    } catch (error) {
+      console.error('Error getting conversation by ID:', error);
+      throw error;
+    }
+  },
+
+  // Find or create conversation for user
+  async findOrCreate(userId, platform, botId) {
+    try {
+      // Look for existing active conversation
+      let conversation = await db.collection(COLLECTIONS.CONVERSATIONS).findOne({
+        userId,
+        status: { $in: ['active', 'waiting_approval'] }
+      });
+
+      if (conversation) {
+        return conversation;
+      }
+
+      // Create new conversation with proper schema
+      const conversationId = this.generateConversationId();
+      const newConversation = {
+        conversationId,
+        userId,
+        platform: platform || 'telegram',
+        botId: botId || null,
+        messages: [],
+        status: 'active',
+        createdAt: new Date().toISOString(),
+        lastMessageAt: new Date().toISOString(),
+        metadata: {}
+      };
+
+      const result = await db.collection(COLLECTIONS.CONVERSATIONS).insertOne(newConversation);
+      console.log(`✅ New conversation created: ${conversationId} for user ${userId}`);
+      
+      return { ...newConversation, _id: result.insertedId };
+    } catch (error) {
+      console.error('Error in findOrCreate conversation:', error);
+      throw error;
+    }
+  },
+
+  // Add message to conversation
+  async addMessage(conversationId, messageData) {
+    try {
+      const { sender, content, metadata = {} } = messageData;
+      
+      const message = {
+        messageId: `MSG-${Math.random().toString(36).substring(2, 10).toUpperCase()}`,
+        sender: sender || 'user', // 'user' | 'bot' | 'admin'
+        content,
+        timestamp: new Date().toISOString(),
+        metadata
+      };
+
+      const result = await db.collection(COLLECTIONS.CONVERSATIONS).findOneAndUpdate(
+        { conversationId },
+        {
+          $push: { messages: message },
+          $set: {
+            lastMessageAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          }
+        },
+        { returnDocument: 'after' }
+      );
+
+      return { message, conversation: result.value };
+    } catch (error) {
+      console.error('Error adding message:', error);
+      throw error;
+    }
+  },
+
+  // Update conversation status
+  async updateStatus(conversationId, status) {
+    try {
+      const result = await db.collection(COLLECTIONS.CONVERSATIONS).findOneAndUpdate(
+        { conversationId },
+        {
+          $set: {
+            status,
+            updatedAt: new Date().toISOString()
+          }
+        },
+        { returnDocument: 'after' }
+      );
+      
+      return result.value;
+    } catch (error) {
+      console.error('Error updating conversation status:', error);
+      throw error;
+    }
   },
 
   // Get conversations by date range
   async getByDateRange(startDate, endDate) {
-    return await db.collection(COLLECTIONS.CONVERSATIONS)
-      .find({
-        lastMessageAt: {
-          $gte: startDate,
-          $lte: endDate
-        }
-      })
-      .sort({ lastMessageAt: -1 })
-      .toArray();
+    try {
+      return await db.collection(COLLECTIONS.CONVERSATIONS)
+        .find({
+          lastMessageAt: {
+            $gte: startDate,
+            $lte: endDate
+          }
+        })
+        .sort({ lastMessageAt: -1 })
+        .toArray();
+    } catch (error) {
+      console.error('Error getting conversations by date range:', error);
+      throw error;
+    }
+  },
+
+  // Reset conversations (clear messages but keep structure)
+  async resetAll() {
+    try {
+      // Delete all conversations but NOT users
+      const result = await db.collection(COLLECTIONS.CONVERSATIONS).deleteMany({});
+      console.log(`🗑️ Reset conversations: ${result.deletedCount} conversations deleted`);
+      return result.deletedCount;
+    } catch (error) {
+      console.error('Error resetting conversations:', error);
+      throw error;
+    }
+  },
+
+  // Get conversation statistics
+  async getStats() {
+    try {
+      const total = await db.collection(COLLECTIONS.CONVERSATIONS).countDocuments();
+      const active = await db.collection(COLLECTIONS.CONVERSATIONS).countDocuments({ 
+        status: 'active' 
+      });
+      const waitingApproval = await db.collection(COLLECTIONS.CONVERSATIONS).countDocuments({ 
+        status: 'waiting_approval' 
+      });
+
+      return { total, active, waitingApproval };
+    } catch (error) {
+      console.error('Error getting conversation stats:', error);
+      throw error;
+    }
   }
 };
 
+// Approval Operations - Production-Grade Transactional Workflow
 const ApprovalOperations = {
-  // Get all approvals
-  async getAll() {
-    return await db.collection(COLLECTIONS.APPROVALS)
-      .find({})
-      .sort({ requestedAt: -1 })
-      .toArray();
+  // Generate unique approval ID: APR-YYYYMMDD-XXXX
+  generateApprovalId() {
+    const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const random = Math.random().toString(36).substring(2, 6).toUpperCase();
+    return `APR-${date}-${random}`;
   },
-  
-  // Get pending approvals
-  async getPending() {
-    return await db.collection(COLLECTIONS.APPROVALS)
-      .find({ status: 'pending' })
-      .sort({ priority: -1, requestedAt: -1 })
-      .toArray();
-  },
-  
-  // Create approval request
-  async create(approval) {
-    const newApproval = {
-      ...approval,
-      id: `approval_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      requestedAt: new Date(),
-      status: 'pending'
-    };
-    
-    await db.collection(COLLECTIONS.APPROVALS).insertOne(newApproval);
-    return newApproval;
-  },
-  
-  // Update approval status
-  async updateStatus(id, status, resolvedBy) {
-    const result = await db.collection(COLLECTIONS.APPROVALS).updateOne(
-      { id },
-      {
-        $set: {
-          status,
-          resolvedBy,
-          resolvedAt: new Date()
+
+  // Get all approvals with pagination
+  async getAll(limit = 100, offset = 0) {
+    try {
+      const approvals = await db.collection(COLLECTIONS.APPROVALS)
+        .find({})
+        .sort({ createdAt: -1 })
+        .skip(offset)
+        .limit(limit)
+        .toArray();
+      
+      // Enrich with user data and map to frontend format
+      const mappedApprovals = [];
+      for (const approval of approvals) {
+        let user = null;
+        if (approval.userId) {
+          user = await UserOperations.getByUserId(approval.userId);
         }
+        
+        // Map to frontend expected format
+        mappedApprovals.push({
+          id: approval.approvalId || approval._id.toString(),
+          approvalId: approval.approvalId,
+          userId: approval.userId,
+          customerName: user?.name || approval.customerName || 'Unknown User',
+          action: approval.actionType || approval.action,
+          actionType: approval.actionType,
+          status: approval.status,
+          priority: approval.priority || 'medium',
+          details: approval.payload || approval.details || {},
+          payload: approval.payload,
+          requestedAt: approval.createdAt || approval.requestedAt,
+          createdAt: approval.createdAt,
+          resolvedAt: approval.resolvedAt,
+          resolvedBy: approval.resolvedBy,
+          user: user
+        });
       }
-    );
-    
-    // Return the updated approval
-    if (result.modifiedCount > 0) {
-      return await db.collection(COLLECTIONS.APPROVALS).findOne({ id });
+      
+      return mappedApprovals;
+    } catch (error) {
+      console.error('Error getting all approvals:', error);
+      throw error;
     }
-    return null;
   },
 
-  // Get approval by ID
-  async getById(id) {
-    return await db.collection(COLLECTIONS.APPROVALS).findOne({ id });
-  },
-
-  // Get approval by user ID
-  async getByUser(userId) {
-    return await db.collection(COLLECTIONS.APPROVALS)
-      .find({ customerId: userId })
-      .sort({ requestedAt: -1 })
-      .toArray();
-  },
-
-  // Update approval (full update)
-  async update(id, updateData) {
-    const result = await db.collection(COLLECTIONS.APPROVALS).updateOne(
-      { id },
-      { $set: updateData }
-    );
-    
-    // Return the updated approval
-    if (result.modifiedCount > 0) {
-      return await db.collection(COLLECTIONS.APPROVALS).findOne({ id });
+  // Get pending approvals (for dashboard)
+  async getPending(limit = 50) {
+    try {
+      const approvals = await db.collection(COLLECTIONS.APPROVALS)
+        .find({ status: 'pending' })
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .toArray();
+      
+      // Enrich with user data and map to frontend format
+      const mappedApprovals = [];
+      for (const approval of approvals) {
+        let user = null;
+        if (approval.userId) {
+          user = await UserOperations.getByUserId(approval.userId);
+        }
+        
+        // Map to frontend expected format
+        mappedApprovals.push({
+          id: approval.approvalId || approval._id.toString(),
+          approvalId: approval.approvalId,
+          userId: approval.userId,
+          customerName: user?.name || approval.customerName || 'Unknown User',
+          action: approval.actionType || approval.action,
+          actionType: approval.actionType,
+          status: approval.status,
+          priority: approval.priority || 'medium',
+          details: approval.payload || approval.details || {},
+          payload: approval.payload,
+          requestedAt: approval.createdAt || approval.requestedAt,
+          createdAt: approval.createdAt,
+          resolvedAt: approval.resolvedAt,
+          resolvedBy: approval.resolvedBy,
+          user: user
+        });
+      }
+      
+      return mappedApprovals;
+    } catch (error) {
+      console.error('Error getting pending approvals:', error);
+      throw error;
     }
-    return null;
   },
 
-  // Delete approval
-  async delete(id) {
-    return await db.collection(COLLECTIONS.APPROVALS).deleteOne({ id });
+  // Get recent approvals for dashboard
+  async getRecent(limit = 10) {
+    try {
+      return await this.getPending(limit);
+    } catch (error) {
+      console.error('Error getting recent approvals:', error);
+      throw error;
+    }
+  },
+
+  // Create approval request - part of transactional workflow
+  async create(approvalData) {
+    try {
+      const { userId, conversationId, actionType, payload, priority = 1 } = approvalData;
+      
+      if (!userId || !actionType) {
+        throw new Error('userId and actionType are required');
+      }
+
+      const approvalId = this.generateApprovalId();
+      const newApproval = {
+        approvalId,
+        userId,
+        conversationId: conversationId || null,
+        actionType, // 'generate_invoice' | 'create_order' | 'refund' | etc.
+        payload: payload || {},
+        status: 'pending',
+        priority,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        resolvedAt: null,
+        resolvedBy: null,
+        metadata: {}
+      };
+
+      const result = await db.collection(COLLECTIONS.APPROVALS).insertOne(newApproval);
+      
+      // Fetch user data for enrichment
+      const user = await UserOperations.getByUserId(userId);
+      
+      console.log(`✅ Approval created: ${approvalId} for user ${userId} - ${actionType}`);
+      
+      return { 
+        ...newApproval, 
+        _id: result.insertedId,
+        user 
+      };
+    } catch (error) {
+      console.error('Error creating approval:', error);
+      throw error;
+    }
+  },
+
+  // Resolve approval - completes the transactional workflow
+  async resolve(approvalId, resolution, resolvedBy) {
+    try {
+      const { status, notes = '' } = resolution;
+      
+      if (!['approved', 'rejected'].includes(status)) {
+        throw new Error('Status must be approved or rejected');
+      }
+
+      const result = await db.collection(COLLECTIONS.APPROVALS).findOneAndUpdate(
+        { approvalId },
+        {
+          $set: {
+            status,
+            resolvedBy,
+            resolvedAt: new Date().toISOString(),
+            notes,
+            updatedAt: new Date().toISOString()
+          }
+        },
+        { returnDocument: 'after' }
+      );
+
+      if (!result.value) {
+        throw new Error(`Approval ${approvalId} not found`);
+      }
+
+      console.log(`✅ Approval ${approvalId} ${status} by ${resolvedBy}`);
+      
+      return result.value;
+    } catch (error) {
+      console.error('Error resolving approval:', error);
+      throw error;
+    }
+  },
+
+  // Execute approval action (called after approval)
+  async executeApproval(approvalId) {
+    try {
+      const approval = await this.getByApprovalId(approvalId);
+      
+      if (!approval) {
+        throw new Error('Approval not found');
+      }
+      
+      if (approval.status !== 'approved') {
+        throw new Error('Approval must be approved before execution');
+      }
+
+      // Execute based on actionType
+      const { actionType, payload, userId } = approval;
+      let result;
+
+      switch (actionType) {
+        case 'create_order':
+          result = await this.executeCreateOrder(userId, payload);
+          break;
+        case 'generate_invoice':
+          result = await this.executeGenerateInvoice(userId, payload);
+          break;
+        case 'refund':
+          result = await this.executeRefund(userId, payload);
+          break;
+        default:
+          throw new Error(`Unknown actionType: ${actionType}`);
+      }
+
+      // Mark as executed
+      await db.collection(COLLECTIONS.APPROVALS).updateOne(
+        { approvalId },
+        {
+          $set: {
+            executedAt: new Date().toISOString(),
+            executionResult: result,
+            updatedAt: new Date().toISOString()
+          }
+        }
+      );
+
+      return result;
+    } catch (error) {
+      console.error('Error executing approval:', error);
+      throw error;
+    }
+  },
+
+  // Execute create order action
+  async executeCreateOrder(userId, payload) {
+    try {
+      const { items, totalAmount } = payload;
+      
+      // Create order using OrderOperations
+      const order = await OrderOperations.create({
+        userId,
+        items,
+        totalAmount,
+        status: 'confirmed',
+        source: 'approval'
+      });
+
+      return { orderId: order.orderId, status: 'created' };
+    } catch (error) {
+      console.error('Error executing create order:', error);
+      throw error;
+    }
+  },
+
+  // Execute generate invoice action
+  async executeGenerateInvoice(userId, payload) {
+    try {
+      const { orderId, amount } = payload;
+      const user = await UserOperations.getByUserId(userId);
+      
+      // Create invoice using InvoiceOperations
+      const invoice = await InvoiceOperations.create({
+        userId,
+        orderId,
+        amount,
+        platform: user?.platform || 'telegram',
+        platformHandle: user?.telegramId || user?.phoneNumber,
+        status: 'pending'
+      });
+
+      return { invoiceId: invoice.invoiceId, status: 'created' };
+    } catch (error) {
+      console.error('Error executing generate invoice:', error);
+      throw error;
+    }
+  },
+
+  // Execute refund action
+  async executeRefund(userId, payload) {
+    try {
+      const { orderId, amount, reason } = payload;
+      
+      // Update order status
+      await OrderOperations.updateStatus(orderId, 'refunded', 'approval_system');
+
+      return { orderId, status: 'refunded', amount, reason };
+    } catch (error) {
+      console.error('Error executing refund:', error);
+      throw error;
+    }
+  },
+
+  // Get approval by approvalId
+  async getByApprovalId(approvalId) {
+    try {
+      const approval = await db.collection(COLLECTIONS.APPROVALS).findOne({ approvalId });
+      
+      if (approval && approval.userId) {
+        approval.user = await UserOperations.getByUserId(approval.userId);
+      }
+      
+      return approval;
+    } catch (error) {
+      console.error('Error getting approval by ID:', error);
+      throw error;
+    }
+  },
+
+  // Get approvals by userId
+  async getByUserId(userId, limit = 50) {
+    try {
+      return await db.collection(COLLECTIONS.APPROVALS)
+        .find({ userId })
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .toArray();
+    } catch (error) {
+      console.error('Error getting approvals by userId:', error);
+      throw error;
+    }
   },
 
   // Get approvals by date range
   async getByDateRange(startDate, endDate = new Date()) {
-    return await db.collection(COLLECTIONS.APPROVALS)
-      .find({
-        requestedAt: {
-          $gte: startDate,
-          $lte: endDate
-        }
-      })
-      .sort({ requestedAt: -1 })
-      .toArray();
+    try {
+      return await db.collection(COLLECTIONS.APPROVALS)
+        .find({
+          createdAt: {
+            $gte: startDate instanceof Date ? startDate.toISOString() : startDate,
+            $lte: endDate instanceof Date ? endDate.toISOString() : endDate
+          }
+        })
+        .sort({ createdAt: -1 })
+        .toArray();
+    } catch (error) {
+      console.error('Error getting approvals by date range:', error);
+      throw error;
+    }
+  },
+
+  // Get approval statistics
+  async getStats() {
+    try {
+      const total = await db.collection(COLLECTIONS.APPROVALS).countDocuments();
+      const pending = await db.collection(COLLECTIONS.APPROVALS).countDocuments({ status: 'pending' });
+      const approved = await db.collection(COLLECTIONS.APPROVALS).countDocuments({ status: 'approved' });
+      const rejected = await db.collection(COLLECTIONS.APPROVALS).countDocuments({ status: 'rejected' });
+
+      return { total, pending, approved, rejected };
+    } catch (error) {
+      console.error('Error getting approval stats:', error);
+      throw error;
+    }
   }
 };
 
@@ -988,137 +1441,432 @@ const OrderOperations = {
   }
 };
 
+// User Operations with Production-Grade User Identity
 const UserOperations = {
-  // Get all users
-  async getAll() {
-    return await db.collection(COLLECTIONS.USERS)
-      .find({})
-      .sort({ createdAt: -1 })
-      .toArray();
+  // Generate unique user ID: USR-YYYYMMDD-XXXX
+  generateUserId() {
+    const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const random = Math.random().toString(36).substring(2, 6).toUpperCase();
+    return `USR-${date}-${random}`;
+  },
+
+  // Find or create user by platform handle (telegramId or phoneNumber)
+  async findOrCreateUser(platformData) {
+    try {
+      const { telegramId, phoneNumber, platform, name, language = 'en' } = platformData;
+      
+      // Build query based on available identifiers
+      const query = {};
+      if (telegramId) query.telegramId = telegramId.toString();
+      if (phoneNumber) query.phoneNumber = phoneNumber;
+      
+      if (Object.keys(query).length === 0) {
+        throw new Error('No platform identifier provided (telegramId or phoneNumber required)');
+      }
+
+      // Check if user exists
+      let user = await db.collection(COLLECTIONS.USERS).findOne({
+        $or: [
+          ...(telegramId ? [{ telegramId: telegramId.toString() }] : []),
+          ...(phoneNumber ? [{ phoneNumber }] : [])
+        ]
+      });
+
+      if (user) {
+        // Update last seen and any changed fields
+        const updateData = {
+          updatedAt: new Date().toISOString(),
+          lastSeenAt: new Date().toISOString(),
+          ...(name && { name }),
+          ...(platform && { platform }),
+          ...(language && { language })
+        };
+        
+        await db.collection(COLLECTIONS.USERS).updateOne(
+          { _id: user._id },
+          { $set: updateData }
+        );
+        
+        // Return updated user
+        return { ...user, ...updateData };
+      }
+
+      // Create new user with proper schema
+      const userId = this.generateUserId();
+      const newUser = {
+        userId,
+        name: name || 'Unknown User',
+        telegramId: telegramId ? telegramId.toString() : null,
+        phoneNumber: phoneNumber || null,
+        platform: platform || 'telegram',
+        language: language || 'en',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        lastSeenAt: new Date().toISOString(),
+        isActive: true,
+        metadata: {}
+      };
+
+      const result = await db.collection(COLLECTIONS.USERS).insertOne(newUser);
+      console.log(`✅ New user created: ${userId} (${name || 'Unknown'})`);
+      
+      return { ...newUser, _id: result.insertedId };
+    } catch (error) {
+      console.error('Error in findOrCreateUser:', error);
+      throw error;
+    }
+  },
+
+  // Get user by userId
+  async getByUserId(userId) {
+    try {
+      return await db.collection(COLLECTIONS.USERS).findOne({ userId });
+    } catch (error) {
+      console.error('Error getting user by ID:', error);
+      throw error;
+    }
   },
 
   // Get user by Telegram ID
   async getByTelegramId(telegramId) {
-    return await db.collection(COLLECTIONS.USERS).findOne({ telegramId });
-  },
-
-  // Get user by ID
-  async getById(userId) {
-    return await db.collection(COLLECTIONS.USERS).findOne({ id: userId });
-  },
-
-  // Create or update user
-  async upsert(user) {
-    const { telegramId } = user;
-    const existingUser = await this.getByTelegramId(telegramId);
-    
-    if (existingUser) {
-      // Update existing user
-      const updateData = {
-        ...user,
-        updatedAt: new Date().toISOString()
-      };
-      
-      await db.collection(COLLECTIONS.USERS).updateOne(
-        { telegramId },
-        { $set: updateData }
-      );
-      
-      return { ...existingUser, ...updateData };
-    } else {
-      // Create new user
-      const newUser = {
-        id: `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        ...user,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-      
-      await db.collection(COLLECTIONS.USERS).insertOne(newUser);
-      return newUser;
+    try {
+      return await db.collection(COLLECTIONS.USERS).findOne({ 
+        telegramId: telegramId.toString() 
+      });
+    } catch (error) {
+      console.error('Error getting user by Telegram ID:', error);
+      throw error;
     }
   },
 
-  // Delete user and associated records
+  // Get user by phone number
+  async getByPhoneNumber(phoneNumber) {
+    try {
+      return await db.collection(COLLECTIONS.USERS).findOne({ phoneNumber });
+    } catch (error) {
+      console.error('Error getting user by phone number:', error);
+      throw error;
+    }
+  },
+
+  // Get all users with pagination
+  async getAll(limit = 100, offset = 0) {
+    try {
+      return await db.collection(COLLECTIONS.USERS)
+        .find({})
+        .sort({ createdAt: -1 })
+        .skip(offset)
+        .limit(limit)
+        .toArray();
+    } catch (error) {
+      console.error('Error getting all users:', error);
+      throw error;
+    }
+  },
+
+  // Update user
+  async update(userId, updateData) {
+    try {
+      const result = await db.collection(COLLECTIONS.USERS).findOneAndUpdate(
+        { userId },
+        { 
+          $set: {
+            ...updateData,
+            updatedAt: new Date().toISOString()
+          }
+        },
+        { returnDocument: 'after' }
+      );
+      return result.value;
+    } catch (error) {
+      console.error('Error updating user:', error);
+      throw error;
+    }
+  },
+
+  // Delete user and associated records (but preserve for analytics)
   async delete(userId) {
     try {
-      // Delete user
-      const userResult = await db.collection(COLLECTIONS.USERS).deleteOne({ id: userId });
+      // Soft delete - mark as inactive rather than removing
+      const result = await db.collection(COLLECTIONS.USERS).updateOne(
+        { userId },
+        { 
+          $set: {
+            isActive: false,
+            deletedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          }
+        }
+      );
       
-      // Delete associated conversations
-      await db.collection(COLLECTIONS.CONVERSATIONS).deleteMany({ customerId: userId });
-      
-      // Delete associated orders
-      await db.collection(COLLECTIONS.ORDERS).deleteMany({ customerId: userId });
-      
-      // Delete associated approvals
-      await db.collection(COLLECTIONS.APPROVALS).deleteMany({ customerId: userId });
-      
-      return userResult.deletedCount > 0;
+      return result.modifiedCount > 0;
     } catch (error) {
       console.error('Error deleting user:', error);
+      throw error;
+    }
+  },
+
+  // Search users by name or userId
+  async search(query) {
+    try {
+      const searchRegex = new RegExp(query, 'i');
+      return await db.collection(COLLECTIONS.USERS)
+        .find({
+          $or: [
+            { name: searchRegex },
+            { userId: searchRegex },
+            { phoneNumber: searchRegex }
+          ],
+          isActive: { $ne: false }
+        })
+        .limit(20)
+        .toArray();
+    } catch (error) {
+      console.error('Error searching users:', error);
       throw error;
     }
   }
 };
 
-// Invoice Operations
+// Invoice Operations with Production-Grade ID Generation and Linking
 const InvoiceOperations = {
+  // Generate unique invoice ID: INV-YYYYMMDD-XXXX
+  generateInvoiceId() {
+    const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const random = Math.random().toString(36).substring(2, 6).toUpperCase();
+    return `INV-${date}-${random}`;
+  },
+
+  // Create new invoice linked to user and order
   async create(invoiceData) {
     try {
-      const db = getDatabase();
+      const { userId, orderId, items, totalAmount, tax = 0, discount = 0, notes = '', dueDate } = invoiceData;
+      
+      // Validate required fields
+      if (!userId) throw new Error('userId is required');
+      if (!items || !Array.isArray(items)) throw new Error('items array is required');
+      
+      // Calculate totals
+      const subtotal = items.reduce((sum, item) => sum + (item.quantity * item.price), 0);
+      const calculatedTotal = subtotal + tax - discount;
+      
+      const invoiceId = this.generateInvoiceId();
       const newInvoice = {
-        id: `inv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        ...invoiceData,
+        invoiceId,
+        userId,
+        orderId: orderId || null,
+        items: items.map(item => ({
+          name: item.name,
+          quantity: item.quantity,
+          unitPrice: item.price,
+          total: item.quantity * item.price
+        })),
+        subtotal,
+        tax,
+        discount,
+        totalAmount: totalAmount || calculatedTotal,
+        status: 'pending',
+        notes,
+        dueDate: dueDate ? new Date(dueDate) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // Default 30 days
         createdAt: new Date(),
         updatedAt: new Date()
       };
       
       const result = await db.collection(COLLECTIONS.INVOICES).insertOne(newInvoice);
-      return result;
+      return { ...newInvoice, _id: result.insertedId };
     } catch (error) {
       console.error('Error creating invoice:', error);
       throw error;
     }
   },
 
-  async getById(invoiceId) {
+  // Get invoice by invoiceId
+  async getByInvoiceId(invoiceId) {
     try {
-      const db = getDatabase();
-      const invoice = await db.collection(COLLECTIONS.INVOICES).findOne({ id: invoiceId });
-      return invoice;
+      return await db.collection(COLLECTIONS.INVOICES).findOne({ invoiceId });
     } catch (error) {
       console.error('Error getting invoice:', error);
       throw error;
     }
   },
 
-  async getByCustomerId(customerId) {
+  // Get all invoices with pagination
+  async getAll(limit = 100, offset = 0) {
     try {
-      const db = getDatabase();
-      const invoices = await db.collection(COLLECTIONS.INVOICES).find({ customerId }).toArray();
-      return invoices;
+      return await db.collection(COLLECTIONS.INVOICES)
+        .find({})
+        .sort({ createdAt: -1 })
+        .skip(offset)
+        .limit(limit)
+        .toArray();
     } catch (error) {
-      console.error('Error getting invoices by customer:', error);
+      console.error('Error getting invoices:', error);
       throw error;
     }
   },
 
-  async updateStatus(invoiceId, status) {
+  // Get invoices by userId
+  async getByUserId(userId) {
     try {
-      const db = getDatabase();
-      const result = await db.collection(COLLECTIONS.INVOICES).updateOne(
-        { id: invoiceId },
+      return await db.collection(COLLECTIONS.INVOICES)
+        .find({ userId })
+        .sort({ createdAt: -1 })
+        .toArray();
+    } catch (error) {
+      console.error('Error getting user invoices:', error);
+      throw error;
+    }
+  },
+
+  // Get invoices by orderId
+  async getByOrderId(orderId) {
+    try {
+      return await db.collection(COLLECTIONS.INVOICES)
+        .find({ orderId })
+        .sort({ createdAt: -1 })
+        .toArray();
+    } catch (error) {
+      console.error('Error getting order invoices:', error);
+      throw error;
+    }
+  },
+
+  // Update invoice status
+  async updateStatus(invoiceId, status, updatedBy = 'system') {
+    try {
+      const validStatuses = ['pending', 'paid', 'overdue', 'cancelled'];
+      if (!validStatuses.includes(status)) {
+        throw new Error(`Invalid status. Must be one of: ${validStatuses.join(', ')}`);
+      }
+      
+      const result = await db.collection(COLLECTIONS.INVOICES).findOneAndUpdate(
+        { invoiceId },
         { 
           $set: { 
             status: status,
-            updatedAt: new Date()
-          } 
-        }
+            updatedAt: new Date(),
+            ...(status === 'paid' ? { paidAt: new Date(), paidBy: updatedBy } : {})
+          }
+        },
+        { returnDocument: 'after' }
       );
-      return result;
+      
+      return result.value;
     } catch (error) {
       console.error('Error updating invoice status:', error);
+      throw error;
+    }
+  },
+
+  // Update invoice
+  async update(invoiceId, updateData) {
+    try {
+      const { items, totalAmount, tax, discount, notes, dueDate } = updateData;
+      
+      // Recalculate totals if items changed
+      let subtotal, calculatedTotal;
+      if (items) {
+        subtotal = items.reduce((sum, item) => sum + (item.quantity * item.price), 0);
+        calculatedTotal = subtotal + (tax || 0) - (discount || 0);
+      }
+      
+      const result = await db.collection(COLLECTIONS.INVOICES).findOneAndUpdate(
+        { invoiceId },
+        { 
+          $set: { 
+            ...(items && { 
+              items: items.map(item => ({
+                name: item.name,
+                quantity: item.quantity,
+                unitPrice: item.price,
+                total: item.quantity * item.price
+              })),
+              subtotal,
+              totalAmount: calculatedTotal
+            }),
+            ...(tax !== undefined && { tax }),
+            ...(discount !== undefined && { discount }),
+            ...(notes && { notes }),
+            ...(dueDate && { dueDate: new Date(dueDate) }),
+            ...(totalAmount && { totalAmount }),
+            updatedAt: new Date()
+          }
+        },
+        { returnDocument: 'after' }
+      );
+      
+      return result.value;
+    } catch (error) {
+      console.error('Error updating invoice:', error);
+      throw error;
+    }
+  },
+
+  // Delete invoice
+  async delete(invoiceId) {
+    try {
+      const result = await db.collection(COLLECTIONS.INVOICES).deleteOne({ invoiceId });
+      return result.deletedCount > 0;
+    } catch (error) {
+      console.error('Error deleting invoice:', error);
+      throw error;
+    }
+  },
+
+  // Get invoice statistics
+  async getStats(startDate) {
+    try {
+      const matchStage = startDate ? { createdAt: { $gte: startDate } } : {};
+      
+      const stats = await db.collection(COLLECTIONS.INVOICES)
+        .aggregate([
+          { $match: matchStage },
+          {
+            $group: {
+              _id: '$status',
+              count: { $sum: 1 },
+              totalAmount: { $sum: '$totalAmount' }
+            }
+          }
+        ])
+        .toArray();
+      
+      const totals = await db.collection(COLLECTIONS.INVOICES)
+        .aggregate([
+          { $match: matchStage },
+          {
+            $group: {
+              _id: null,
+              totalInvoices: { $sum: 1 },
+              totalRevenue: { $sum: '$totalAmount' },
+              avgInvoiceValue: { $avg: '$totalAmount' }
+            }
+          }
+        ])
+        .toArray();
+      
+      return {
+        byStatus: stats.reduce((acc, s) => ({ ...acc, [s._id]: { count: s.count, total: s.totalAmount } }), {}),
+        totals: totals[0] || { totalInvoices: 0, totalRevenue: 0, avgInvoiceValue: 0 }
+      };
+    } catch (error) {
+      console.error('Error getting invoice stats:', error);
+      throw error;
+    }
+  },
+
+  // Get overdue invoices
+  async getOverdue() {
+    try {
+      return await db.collection(COLLECTIONS.INVOICES)
+        .find({ 
+          status: 'pending',
+          dueDate: { $lt: new Date() }
+        })
+        .sort({ dueDate: 1 })
+        .toArray();
+    } catch (error) {
+      console.error('Error getting overdue invoices:', error);
       throw error;
     }
   }

@@ -153,3 +153,9 @@ coverage/
 # Lock files (keep package-lock.json but ignore yarn.lock if using npm)
 package-lock.json
 yarn.lock   
+
+# Internal documentation 
+DEPLOYMENT_GUIDE.md
+DEVELOPER_NOTES.md
+SECURITY_*.md
+PRODUCTION_*.md   

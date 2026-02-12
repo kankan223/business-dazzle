@@ -18,9 +18,10 @@ interface Notification {
 
 interface NotificationsProps {
   className?: string;
+  onNavigate?: (tab: string) => void;
 }
 
-export const Notifications: React.FC<NotificationsProps> = ({ className = '' }) => {
+export const Notifications: React.FC<NotificationsProps> = ({ className = '', onNavigate }) => {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [isOpen, setIsOpen] = useState(false);
@@ -142,14 +143,20 @@ export const Notifications: React.FC<NotificationsProps> = ({ className = '' }) 
     if (!notification.read) {
       markAsRead(notification.id);
     }
-    // Handle any additional actions based on notification type/data
+    
+    // Close the dropdown
+    setIsOpen(false);
+    
+    // Handle navigation based on notification type/data
     if (notification.data?.orderId) {
-      // Navigate to order details
       console.log('Navigate to order:', notification.data.orderId);
     }
-    if (notification.data?.approvalId) {
-      // Navigate to approval details
-      console.log('Navigate to approval:', notification.data.approvalId);
+    if (notification.data?.approvalId || notification.type === 'approval') {
+      // Navigate to approvals tab
+      onNavigate?.('approvals');
+    }
+    if (notification.type === 'invoice') {
+      onNavigate?.('invoices');
     }
   };
 
@@ -192,7 +199,7 @@ export const Notifications: React.FC<NotificationsProps> = ({ className = '' }) 
 
       {/* Notifications Dropdown */}
       {isOpen && (
-        <div className="absolute right-0 mt-2 w-96 bg-white rounded-lg shadow-lg border border-gray-200 z-50 max-h-96 overflow-hidden">
+        <div className="absolute right-0 mt-2 w-96 bg-white rounded-lg shadow-lg border border-gray-200 z-[100] max-h-96 overflow-hidden">
           {/* Header */}
           <div className="p-4 border-b border-gray-200">
             <div className="flex items-center justify-between">

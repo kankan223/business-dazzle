@@ -119,7 +119,7 @@ export const DirectCommand: React.FC<DirectCommandProps> = ({ onResponse }) => {
                     </div>
                   </div>
                   <div className="text-sm whitespace-pre-wrap">
-                    {entry.response.text || JSON.stringify(entry.response)}
+                    {entry.response?.text || JSON.stringify(entry.response) || 'No response'}
                   </div>
                 </div>
               ))}

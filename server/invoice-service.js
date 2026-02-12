@@ -22,87 +22,76 @@ class InvoiceService {
   }
 
   /**
-   * Generate invoice PDF for an order
+   * Generate invoice PDF for an order and persist to database
    */
-  async generateInvoice(orderId, format = 'pdf') {
+  async generateInvoice(orderId, format = 'pdf', options = {}) {
     try {
       // Get order details from database
-      const OrderOperations = require('./database').OrderOperations;
+      const { OrderOperations, InvoiceOperations, UserOperations } = require('./database');
       const order = await OrderOperations.getById(orderId);
       
       if (!order) {
         throw new Error('Order not found');
       }
       
-      // Get customer details
-      const CustomerOperations = require('./database').CustomerOperations;
-      const customer = await CustomerOperations.getById(order.customerId);
+      // Get user details (not customer) using userId
+      const user = order.userId ? await UserOperations.getByUserId(order.userId) : null;
       
-      // Generate unique invoice ID
-      const invoiceId = `INV-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
-      
-      // Calculate totals
-      const subtotal = order.items?.reduce((sum, item) => sum + (item.price * item.quantity), 0) || 0;
-      const tax = subtotal * 0.18; // 18% GST
-      const total = subtotal + tax;
-      
-      // Create invoice data
-      const invoiceData = {
-        invoiceId,
-        orderId: order.orderId,
-        customer: {
-          name: customer?.name || 'Customer',
-          phone: customer?.phone || 'N/A',
-          email: customer?.email || 'N/A',
-          address: customer?.address || 'N/A'
-        },
-        date: {
-          issued: new Date().toISOString().split('T')[0],
-          due: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0] // 7 days
-        },
-        items: order.items || [{
-          name: 'Sample Product',
-          description: 'Product description',
-          quantity: 1,
-          unit: 'kg',
-          price: 0,
-          total: 0
-        }],
-        totals: {
-          subtotal,
-          tax,
-          total,
-          currency: 'INR'
-        },
-        payment: {
-          method: 'COD',
-          status: 'pending'
-        },
-        business: {
-          name: 'Bharat Biz-Agent',
-          address: '123 Business Street, Mumbai, Maharashtra 400001',
-          phone: '+91-9876543210',
-          email: 'support@bharatbiz.com',
-          taxId: 'GSTIN123456789',
-          bank: {
-            name: 'State Bank of India',
-            account: '123456789012345',
-            ifsc: 'SBIN0001234'
-          }
-        },
-        notes: order.notes || 'Thank you for your business!'
-      };
-      
-      if (format === 'pdf') {
-        return await this.generatePDFInvoice(invoiceData);
-      } else {
-        return {
-          success: true,
-          data: invoiceData,
-          format: 'json'
-        };
+      if (!user) {
+        throw new Error('User not found for this order');
       }
       
+      // Create invoice in database
+      const invoice = await InvoiceOperations.create({
+        userId: user.userId,
+        orderId: order.orderId || orderId,
+        items: order.items || [],
+        totalAmount: order.total,
+        tax: order.tax || 0,
+        discount: order.discount || 0,
+        notes: order.notes || ''
+      });
+      
+      // Generate PDF if requested
+      let pdfResult = null;
+      if (format === 'pdf') {
+        const invoiceData = {
+          invoiceId: invoice.invoiceId,
+          orderId: order.orderId,
+          customer: {
+            name: user.name || 'Customer',
+            phone: user.phoneNumber || 'N/A',
+            email: user.email || 'N/A',
+            address: user.address || 'N/A'
+          },
+          date: {
+            issued: new Date(invoice.createdAt).toISOString().split('T')[0],
+            due: new Date(invoice.dueDate).toISOString().split('T')[0]
+          },
+          items: invoice.items,
+          totals: {
+            subtotal: invoice.subtotal,
+            tax: invoice.tax,
+            total: invoice.totalAmount,
+            currency: 'INR'
+          },
+          payment: {
+            method: order.paymentMethod || 'COD',
+            status: invoice.status
+          }
+        };
+        pdfResult = await this.generatePDFInvoice(invoiceData);
+      }
+      
+      // Send invoice to user's platform
+      await this.sendInvoiceToUser(user, invoice, pdfResult);
+      
+      return {
+        success: true,
+        invoice,
+        pdf: pdfResult,
+        message: `Invoice ${invoice.invoiceId} created and sent to ${user.platform || 'user'}`
+      };
     } catch (error) {
       console.error('Invoice generation error:', error);
       throw error;
@@ -362,6 +351,30 @@ class InvoiceService {
         success: false,
         error: error.message
       };
+    }
+  }
+
+  /**
+   * Send invoice to user's platform (Telegram/WhatsApp)
+   */
+  async sendInvoiceToUser(user, invoice, pdfResult) {
+    try {
+      const message = `📄 *Invoice Generated*\n\nInvoice ID: ${invoice.invoiceId}\nAmount: ₹${invoice.totalAmount}\nDue Date: ${new Date(invoice.dueDate).toLocaleDateString()}\n\nThank you for your business!`;
+      
+      if (user.platform === 'telegram' && user.telegramId) {
+        const TelegramBotService = require('./bot-telegram');
+        await TelegramBotService.sendMessage(user.telegramId, message);
+        
+        if (pdfResult?.filepath) {
+          await TelegramBotService.sendDocument(user.telegramId, pdfResult.filepath);
+        }
+      } else if (user.platform === 'whatsapp' && user.phoneNumber) {
+        console.log(`📱 Would send invoice ${invoice.invoiceId} to WhatsApp ${user.phoneNumber}`);
+      }
+      
+      console.log(`✅ Invoice ${invoice.invoiceId} sent to ${user.platform} user ${user.userId}`);
+    } catch (error) {
+      console.error('Error sending invoice to user:', error);
     }
   }
 }

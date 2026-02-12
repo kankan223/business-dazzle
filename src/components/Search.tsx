@@ -118,14 +118,18 @@ export const SearchComponent: React.FC<SearchProps> = ({ className = '', onResul
 
       const response = await apiService.performSearch(searchParams);
       
+      const results = response?.results || [];
+      const total = response?.total || 0;
+      const hasMore = response?.hasMore || false;
+      
       if (resetOffset) {
-        setResults(response.results);
+        setResults(results);
         setOffset(0);
       } else {
-        setResults(prev => [...prev, ...response.results]);
+        setResults(prev => [...(prev || []), ...results]);
       }
-      setTotalResults(response.total);
-      setHasMore(response.hasMore);
+      setTotalResults(total);
+      setHasMore(hasMore);
     } catch (error) {
       console.error('Search error:', error);
       toast.error('Search failed');
@@ -574,7 +578,7 @@ export const SearchComponent: React.FC<SearchProps> = ({ className = '', onResul
             </div>
           ) : (
             <div className="space-y-3">
-              {results.map((result, index) => {
+              {(results || []).map((result, index) => {
                 const display = formatResultDisplay(result);
                 return (
                   <div

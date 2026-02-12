@@ -13,11 +13,11 @@ class GeminiAIService {
       console.warn('⚠️ GEMINI_API_KEY not configured. AI features will be limited.');
     }
     
-    // Model fallback priority
+    // Model fallback priority - using correct model names
     this.MODEL_PRIORITY = [
-      'gemini-2.5-flash',
-      'gemini-2.5-pro',
-      'gemini-2.0-flash'
+      'gemini-1.5-flash',
+      'gemini-1.5-flash-8b',
+      'gemini-1.5-pro'
     ];
     
     // Use stable model only
@@ -195,7 +195,7 @@ Respond with JSON only.`
       if (!this.model) {
         console.warn('⚠️ AI model not initialized, attempting to reinitialize...');
         try {
-          model = await this.getAvailableModel();
+          this.model = await this.getAvailableModel();
         } catch (error) {
           console.warn('AI models unavailable, using fallback:', error.message);
           return this.getFallbackStructuredResponse(message);
@@ -210,7 +210,7 @@ History: ${JSON.stringify((conversationHistory || []).slice(-3))}
 
 Respond with JSON only.`;
 
-      const result = await model.generateContent(prompt);
+      const result = await this.model.generateContent(prompt);
       const responseText = result.response.text().trim();
       
       console.log('📝 AI Raw Response:', responseText.substring(0, 200) + (responseText.length > 200 ? '...' : ''));
@@ -340,15 +340,102 @@ Respond with JSON only.`;
   // Fallback structured response when AI fails
   getFallbackStructuredResponse(message) {
     const language = this.detectLanguage(message);
+    const lowerMessage = message.toLowerCase();
+    
+    // Basic pattern matching for common requests
+    let intent = 'general_query';
+    let proposedAction = 'human_assistance_needed';
+    let requiresApproval = false;
+    
+    // Detect order-related messages
+    if (lowerMessage.includes('order') || lowerMessage.includes('bill') || lowerMessage.includes('invoice')) {
+      intent = 'create_order';
+      proposedAction = 'Create order - requires human assistance';
+      requiresApproval = true;
+    }
+    
+    // Detect payment-related messages
+    if (lowerMessage.includes('payment') || lowerMessage.includes('pay') || lowerMessage.includes('reminder')) {
+      intent = 'payment_reminder';
+      proposedAction = 'Send payment reminder';
+    }
+    
+    // Detect inventory-related messages
+    if (lowerMessage.includes('stock') || lowerMessage.includes('inventory') || lowerMessage.includes('check')) {
+      intent = 'check_inventory';
+      proposedAction = 'Check inventory status';
+    }
+    
+    // Detect greeting messages
+    if (lowerMessage.includes('hello') || lowerMessage.includes('hi') || lowerMessage.includes('namaste')) {
+      intent = 'general_query';
+      proposedAction = 'Provide greeting and assistance';
+    }
     
     return {
-      intent: 'general_query',
-      entities: { products: [], amounts: [], people: [], quantities: [] },
+      intent: intent,
+      entities: { 
+        products: this.extractProducts(message),
+        amounts: this.extractAmounts(message),
+        people: this.extractPeople(message),
+        quantities: this.extractQuantities(message)
+      },
       language: language,
-      confidence: 0.3,
-      requiresApproval: false,
-      proposedAction: 'human_assistance_needed'
+      confidence: 0.6, // Higher confidence for pattern matching
+      requiresApproval: requiresApproval,
+      proposedAction: proposedAction
     };
+  }
+  
+  // Simple pattern extraction methods
+  extractProducts(message) {
+    const products = [];
+    const productPatterns = ['rice', 'sugar', 'wheat', 'oil', 'dal', 'atta', 'milk', 'bread'];
+    const lowerMessage = message.toLowerCase();
+    
+    productPatterns.forEach(product => {
+      if (lowerMessage.includes(product)) {
+        products.push(product);
+      }
+    });
+    
+    return products;
+  }
+  
+  extractAmounts(message) {
+    const amounts = [];
+    const amountPattern = /₹?(\d+(?:,\d+)*(?:\.\d+)?)/g;
+    const matches = message.match(amountPattern);
+    
+    if (matches) {
+      amounts.push(...matches.map(m => m.replace('₹', '').replace(',', '')));
+    }
+    
+    return amounts;
+  }
+  
+  extractPeople(message) {
+    const people = [];
+    const namePattern = /\b([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)\b/g;
+    const matches = message.match(namePattern);
+    
+    if (matches) {
+      people.push(...matches);
+    }
+    
+    return people;
+  }
+  
+  extractQuantities(message) {
+    const quantities = [];
+    const quantityPattern = /(\d+(?:\.\d+)?)\s*(kg|lit|pcs|grams|ml|units?)/gi;
+    const matches = message.match(quantityPattern);
+    
+    if (matches) {
+      quantities.push(...matches);
+    }
+    
+    return quantities;
   }
 
   // Generate business recommendations for admin
@@ -804,4 +891,8 @@ Please respond appropriately and determine if any admin approval is needed.`;
   }
 }
 
-module.exports = new GeminiAIService();
+// DISABLED - Using Simple AI Service instead
+module.exports = {
+  processCustomerMessage: async () => ({ error: 'Gemini service disabled' }),
+  generateBusinessInsights: async () => ({ error: 'Gemini service disabled' })
+};

@@ -53,7 +53,6 @@ export default function App() {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activityData, setActivityData] = useState<any>(null);
-  const [lowStockWarnings, setLowStockWarnings] = useState<any[]>([]);
   const [orders, setOrders] = useState<any[]>([]);
   const [inventory, setInventory] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
@@ -95,9 +94,6 @@ export default function App() {
   const [autoApproveThreshold, setAutoApproveThreshold] = useState(5000);
   const [processingApprovalId, setProcessingApprovalId] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
-
-  // Low stock warnings are displayed via toast notifications
-  console.log('Low stock warnings count:', lowStockWarnings.length);
 
   // Apply dark mode on mount
   useEffect(() => {
@@ -148,24 +144,25 @@ export default function App() {
     });
   }, [activityData]);
 
-  // Generate platform distribution data
+  // Generate platform distribution data - always compute from conversations
   const platformData = useMemo(() => {
-    if (!activityData || !activityData.summary) {
+    const total = platformCounts.telegram + platformCounts.whatsapp;
+    
+    if (total === 0) {
       return [
-        { name: 'Telegram', value: 65, color: '#0088cc' },
-        { name: 'WhatsApp', value: 35, color: '#25D366' }
+        { name: 'Telegram', value: 0, color: '#0088cc' },
+        { name: 'WhatsApp', value: 0, color: '#25D366' }
       ];
     }
-
-    const total = platformCounts.telegram + platformCounts.whatsapp;
-    const telegramPercent = total > 0 ? Math.round((platformCounts.telegram / total) * 100) : 0;
-    const whatsappPercent = total > 0 ? Math.round((platformCounts.whatsapp / total) * 100) : 0;
+    
+    const telegramPercent = Math.round((platformCounts.telegram / total) * 100);
+    const whatsappPercent = Math.round((platformCounts.whatsapp / total) * 100);
 
     return [
       { name: 'Telegram', value: telegramPercent, color: '#0088cc' },
       { name: 'WhatsApp', value: whatsappPercent, color: '#25D366' }
     ];
-  }, [activityData, platformCounts]);
+  }, [platformCounts]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -313,7 +310,6 @@ export default function App() {
 
     apiService.onLowStockWarning((data) => {
       console.log('Low stock warning:', data);
-      setLowStockWarnings(prev => [...prev, data.item]);
       toast.warning(`Low stock warning: ${data.item.name} (${data.item.quantity} ${data.item.unit} remaining)`);
     });
 
@@ -818,7 +814,7 @@ export default function App() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Notifications />
+            <Notifications onNavigate={setActiveTab} />
             <Button
               variant="ghost"
               size="sm"
@@ -841,7 +837,7 @@ export default function App() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <Notifications />
+            <Notifications onNavigate={setActiveTab} />
             <Button variant="ghost" size="icon" onClick={() => setDarkMode(!darkMode)}>
               {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </Button>
@@ -1185,7 +1181,7 @@ export default function App() {
                               <div className="flex items-center gap-4">
                                 <Avatar className="h-12 w-12">
                                   <AvatarFallback className="bg-gradient-to-br from-orange-500 to-orange-600 text-white">
-                                    {approval.customerName.split(' ').map(n => n[0]).join('')}
+                                    {(approval.customerName || 'Unknown').split(' ').map(n => n?.[0] || '?').join('')}
                                   </AvatarFallback>
                                 </Avatar>
                                 <div>
@@ -1232,7 +1228,7 @@ export default function App() {
                                 </div>
                               )}
                             </div>
-                            {approval.details.items && (
+                            {approval.details?.items && (
                               <div className="mt-3 p-3 bg-muted rounded-lg">
                                 <p className="text-sm font-medium mb-1">Items:</p>
                                 <ul className="text-sm text-muted-foreground">
@@ -1323,7 +1319,7 @@ export default function App() {
                               <div className="flex items-center gap-3">
                                 <Avatar>
                                   <AvatarFallback className="bg-gradient-to-br from-orange-500 to-orange-600 text-white">
-                                    {selectedConversation.customerName.split(' ').map(n => n[0]).join('')}
+                                    {(selectedConversation.customerName || 'Unknown').split(' ').map(n => n?.[0] || '?').join('')}
                                   </AvatarFallback>
                                 </Avatar>
                                 <div>

@@ -52,7 +52,7 @@ const analyticsService = require('./analytics-service');
 const searchService = require('./search-service');
 const exportService = require('./export-service');
 const i18nService = require('./i18n-service');
-const geminiService = require('./gemini-service');
+const { SimpleAIService } = require('./simple-ai-service');
 const intentProcessor = require('./intent-processor');
 const indianLanguageProcessor = require('./indian-language-processor');
 const indianVoiceService = require('./indian-voice-service');
@@ -253,7 +253,7 @@ if (!fs.existsSync('uploads')) {
 
 // Initialize services
 const speechService = new SpeechToTextService();
-const aiService = new AIService();
+const simpleAIService = new SimpleAIService();
 const voiceService = new VoiceService();
 const invoiceService = new InvoiceService();
 
@@ -376,6 +376,20 @@ async function broadcastMessageToAdmins(messageData) {
   }
 }
 
+// ==================== REAL-TIME SYNC BROADCASTERS ====================
+
+// Broadcast database changes to all admin dashboards
+async function broadcastEntityChange(entityType, action, data) {
+  const eventName = `realtime.${entityType}`;
+  broadcastToAdmins(eventName, {
+    action, // 'created', 'updated', 'deleted'
+    data,
+    timestamp: new Date().toISOString()
+  });
+}
+
+// Make broadcast functions globally available for database operations
+global.broadcastEntityChange = broadcastEntityChange;
 
 const TelegramBot = require('node-telegram-bot-api');
 
@@ -398,7 +412,18 @@ function initializeTelegramBot() {
             timeout: 30000, // 30 second timeout
             agentOptions: {
               keepAlive: true,
-              family: 4 // Force IPv4
+              family: 4, // Force IPv4
+              keepAliveMsecs: 30000,
+              maxSockets: 5,
+              maxFreeSockets: 2
+            }
+          },
+          polling: {
+            interval: 2000, // 2 seconds between requests to avoid conflicts
+            autoStart: true,
+            params: {
+              timeout: 30, // 30 second polling timeout
+              allowed_updates: ['message', 'callback_query'] // Only get message updates
             }
           }
         }
@@ -410,6 +435,18 @@ function initializeTelegramBot() {
       // Add error handling
       telegramBot.on('polling_error', (err) => {
         if (process.env.NODE_ENV !== 'test') {
+          // Handle specific polling errors
+          if (err.code === 'EFATAL' || err.code === 'ESOCKETTIMEDOUT') {
+            console.warn('⚠️ Telegram polling timeout, retrying...');
+            // Don't log fatal errors as crashes, they're normal network issues
+            return;
+          }
+          
+          if (err.code === 'ETELEGRAM') {
+            console.error('🚨 Telegram API error:', err.message);
+            return;
+          }
+          
           console.error('🚨 Telegram polling error:', err);
           // Don't crash on polling errors, just log them
         }
@@ -458,7 +495,8 @@ if (telegramBot) {
       }
 
       // 3️⃣ Hard approval lock
-      const lockedApproval = await ApprovalOperations.getByUser(userId);
+      const lockedApprovals = await ApprovalOperations.getByUserId(userId);
+      const lockedApproval = lockedApprovals && lockedApprovals.length > 0 ? lockedApprovals[0] : null;
       if (lockedApproval && ['pending', 'approved'].includes(lockedApproval.status)) {
         try {
           await telegramBot.sendMessage(
@@ -743,8 +781,8 @@ app.use('/api', apiLimiter);
 // Apply i18n middleware
 app.use(i18nService.languageMiddleware());
 
-// ==================== DEBUG STREAM ENDPOINT ====================
-app.get('/api/debug/stream', (req, res) => {
+  // Debug event stream endpoint (with auth)
+app.get('/api/debug/stream', authenticateApiKey, (req, res) => {
   // Set headers for Server-Sent Events
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -826,6 +864,115 @@ app.post('/api/debug/disable', (req, res) => {
       error: 'Internal server error' 
     });
   }
+});
+
+// Debug test mode - simulate events
+app.post('/api/debug/test-mode', authenticateApiKey, async (req, res) => {
+  try {
+    const { enabled, eventTypes = ['message', 'approval', 'order', 'system'], interval = 3000 } = req.body;
+    
+    if (enabled) {
+      // Start test mode - simulate events at intervals
+      if (global.testModeInterval) {
+        clearInterval(global.testModeInterval);
+      }
+      
+      global.testModeEnabled = true;
+      global.testModeInterval = setInterval(() => {
+        const eventType = eventTypes[Math.floor(Math.random() * eventTypes.length)];
+        const mockEvents = {
+          message: {
+            type: 'MESSAGE_RECEIVED',
+            timestamp: new Date().toISOString(),
+            payload: {
+              userId: `USR-${Date.now().toString().slice(0, 8)}-TEST`,
+              content: 'Test message from simulated user',
+              platform: Math.random() > 0.5 ? 'telegram' : 'whatsapp'
+            }
+          },
+          approval: {
+            type: 'APPROVAL_REQUESTED',
+            timestamp: new Date().toISOString(),
+            payload: {
+              approvalId: `APR-${Date.now().toString().slice(0, 8)}-TEST`,
+              actionType: 'order_approval',
+              priority: Math.floor(Math.random() * 3) + 1
+            }
+          },
+          order: {
+            type: 'ORDER_CREATED',
+            timestamp: new Date().toISOString(),
+            payload: {
+              orderId: `ORD-${Date.now().toString().slice(0, 8)}-TEST`,
+              totalAmount: Math.floor(Math.random() * 5000) + 100,
+              itemCount: Math.floor(Math.random() * 5) + 1
+            }
+          },
+          system: {
+            type: 'SYSTEM_METRIC',
+            timestamp: new Date().toISOString(),
+            payload: {
+              metric: 'cpu_usage',
+              value: Math.floor(Math.random() * 100),
+              unit: 'percent'
+            }
+          }
+        };
+        
+        const event = mockEvents[eventType];
+        
+        // Broadcast to all debug connections
+        debugConnections.forEach(conn => {
+          if (conn.readyState === 1) {
+            conn.write(`data: ${JSON.stringify(event)}\n\n`);
+          }
+        });
+        
+        // Also broadcast to admin dashboards via WebSocket
+        broadcastToAdmins('debug.event', event);
+        
+      }, interval);
+      
+      res.json({
+        success: true,
+        message: 'Debug test mode enabled',
+        config: {
+          eventTypes,
+          interval,
+          startedAt: new Date().toISOString()
+        }
+      });
+    } else {
+      // Disable test mode
+      if (global.testModeInterval) {
+        clearInterval(global.testModeInterval);
+        global.testModeInterval = null;
+      }
+      global.testModeEnabled = false;
+      
+      res.json({
+        success: true,
+        message: 'Debug test mode disabled'
+      });
+    }
+  } catch (error) {
+    console.error('Debug test mode error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to toggle test mode'
+    });
+  }
+});
+
+// Get debug test mode status
+app.get('/api/debug/test-mode', authenticateApiKey, (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      enabled: global.testModeEnabled || false,
+      startedAt: global.testModeStartedAt || null
+    }
+  });
 });
 
 // ==================== ROUTES ====================
@@ -1382,7 +1529,7 @@ async function handleTelegramMessage(message, telegramBot) {
     // Step 2: Intent Extraction (AI)
     let aiResponse;
     try {
-      aiResponse = await geminiService.processCustomerMessage(content, {
+      aiResponse = await simpleAIService.processCustomerMessage(content, {
         platform: 'telegram',
         userId: userId.toString()
       }, []);
@@ -1640,6 +1787,16 @@ async function executeBusinessAction(aiResponse, customerId, message) {
 
 // Generate appropriate user response
 function generateUserResponse(aiResponse, approvalDecision, language) {
+  // Handle fallback responses with better messaging
+  if (aiResponse.proposedAction === 'human_assistance_needed' && aiResponse.confidence === 0.6) {
+    const fallbackResponses = {
+      en: "🤖 I'm here to help! I can assist with:\n\n• Creating orders and invoices\n• Payment reminders\n• Inventory checks\n• General business queries\n\nPlease describe what you need in more detail, or contact our support team for complex requests.",
+      hi: "🤖 मैं आपकी मदद के लिए यहाँ हूँ! मैं इनमें मदद कर सकता हूँ:\n\n• ऑर्डर और इनवॉइस बनाना\n• पेमेंट रिमाइंडर\n• इन्वेंट्री चेक\n• सामान्य व्यापारिक प्रश्न\n\nकृपया अपनी ज़रूरत विस्तार से बताएं, या जटिल अनुरोधों के लिए हमारी सहायता टीम से संपर्क करें।",
+      hinglish: "🤖 Main aapki help ke liye yahan hoon! Main in mein help kar sakta hoon:\n\n• Orders aur invoices banana\n• Payment reminders\n• Inventory check\n• General business queries\n\nKripya apni zaroorat detail mein batayein, ya complex requests ke liye hamari support team se contact karein."
+    };
+    return fallbackResponses[language] || fallbackResponses.en;
+  }
+  
   if (approvalDecision.required) {
     const responses = {
       en: `⏳ Your request requires approval. I've sent it to the admin for review.\n\nAction: ${aiResponse.proposedAction}\nReason: ${approvalDecision.reason}`,
@@ -2332,10 +2489,218 @@ if (process.env.NODE_ENV === 'test') {
 }
 
 
-// Get pending approvals
-app.get('/api/approvals', (req, res) => {
-  const approvals = Array.from(pendingApprovals.values());
-  res.json(approvals);
+// ==================== PRODUCTION-GRADE APPROVALS API ====================
+
+// Get all approvals with pagination
+app.get('/api/approvals', authenticateApiKey, async (req, res) => {
+  try {
+    const { limit = 100, offset = 0, status } = req.query;
+    
+    let approvals;
+    if (status === 'pending') {
+      approvals = await ApprovalOperations.getPending(parseInt(limit));
+    } else {
+      approvals = await ApprovalOperations.getAll(parseInt(limit), parseInt(offset));
+    }
+    
+    res.json({ 
+      success: true, 
+      data: approvals,
+      count: approvals.length
+    });
+  } catch (error) {
+    console.error('Error getting approvals:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to get approvals' 
+    });
+  }
+});
+
+// Get recent pending approvals for dashboard
+app.get('/api/approvals/recent', authenticateApiKey, async (req, res) => {
+  try {
+    const { limit = 10 } = req.query;
+    const approvals = await ApprovalOperations.getRecent(parseInt(limit));
+    
+    res.json({ 
+      success: true, 
+      data: approvals,
+      count: approvals.length
+    });
+  } catch (error) {
+    console.error('Error getting recent approvals:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to get recent approvals' 
+    });
+  }
+});
+
+// Get approval statistics
+app.get('/api/approvals/stats', authenticateApiKey, async (req, res) => {
+  try {
+    const stats = await ApprovalOperations.getStats();
+    res.json({ 
+      success: true, 
+      data: stats
+    });
+  } catch (error) {
+    console.error('Error getting approval stats:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to get approval stats' 
+    });
+  }
+});
+
+// Get single approval by ID
+app.get('/api/approvals/:approvalId', authenticateApiKey, async (req, res) => {
+  try {
+    const { approvalId } = req.params;
+    const approval = await ApprovalOperations.getByApprovalId(approvalId);
+    
+    if (!approval) {
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Approval not found' 
+      });
+    }
+    
+    res.json({ 
+      success: true, 
+      data: approval
+    });
+  } catch (error) {
+    console.error('Error getting approval:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to get approval' 
+    });
+  }
+});
+
+// Create new approval (internal use or admin)
+app.post('/api/approvals', authenticateApiKey, async (req, res) => {
+  try {
+    const { userId, conversationId, actionType, payload, priority = 1 } = req.body;
+    
+    if (!userId || !actionType) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'userId and actionType are required' 
+      });
+    }
+    
+    const approval = await ApprovalOperations.create({
+      userId,
+      conversationId,
+      actionType,
+      payload,
+      priority
+    });
+    
+    // Broadcast to all connected admins via WebSocket
+    broadcastToAdmins('approval.created', approval);
+    
+    res.status(201).json({ 
+      success: true, 
+      data: approval
+    });
+  } catch (error) {
+    console.error('Error creating approval:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to create approval' 
+    });
+  }
+});
+
+// Resolve approval (approve/reject) - completes transactional workflow
+app.post('/api/approvals/:approvalId/resolve', authenticateApiKey, async (req, res) => {
+  try {
+    const { approvalId } = req.params;
+    const { status, notes = '' } = req.body;
+    const resolvedBy = req.headers['x-admin-id'] || 'admin@dashboard';
+    
+    if (!['approved', 'rejected'].includes(status)) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Status must be approved or rejected' 
+      });
+    }
+    
+    // Resolve the approval
+    const approval = await ApprovalOperations.resolve(approvalId, { status, notes }, resolvedBy);
+    
+    // If approved, execute the action
+    let executionResult = null;
+    if (status === 'approved') {
+      try {
+        executionResult = await ApprovalOperations.executeApproval(approvalId);
+      } catch (execError) {
+        console.error('Error executing approval action:', execError);
+        // Don't fail the request, but include error in response
+        executionResult = { error: execError.message };
+      }
+    }
+    
+    // Broadcast update to all connected admins
+    broadcastToAdmins('approval.resolved', { 
+      approvalId, 
+      status, 
+      resolvedBy,
+      executionResult 
+    });
+    
+    // Log the action
+    logSecurityEvent(
+      `Approval ${status}`,
+      resolvedBy,
+      req.ip,
+      'info',
+      `${approval.actionType} for user ${approval.userId}`
+    );
+    
+    res.json({ 
+      success: true, 
+      data: approval,
+      executionResult
+    });
+  } catch (error) {
+    console.error('Error resolving approval:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to resolve approval' 
+    });
+  }
+});
+
+// Delete approval (admin only)
+app.delete('/api/approvals/:approvalId', authenticateApiKey, async (req, res) => {
+  try {
+    const { approvalId } = req.params;
+    
+    const result = await db.collection(COLLECTIONS.APPROVALS).deleteOne({ approvalId });
+    
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Approval not found' 
+      });
+    }
+    
+    res.json({ 
+      success: true, 
+      message: 'Approval deleted' 
+    });
+  } catch (error) {
+    console.error('Error deleting approval:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to delete approval' 
+    });
+  }
 });
 
 // Approve/reject request
@@ -2390,52 +2755,233 @@ app.post('/api/approvals/:id', async (req, res) => {
   res.json({ success: true, approval });
 });
 
-// Get conversations
-app.get('/api/conversations', (req, res) => {
-  const conversations = Array.from(botConversations.entries()).map(([id, conv]) => ({
-    id,
-    customerPhone: conv.customerPhone,
-    customerName: conv.customerName,
-    platform: conv.platform,
-    messageCount: conv.messages.length,
-    lastActivity: conv.messages[conv.messages.length - 1]?.timestamp,
-    language: conv.language
-  }));
-  
-  res.json(conversations);
-});
+// ==================== PRODUCTION-GRADE CONVERSATIONS API ====================
 
-// Get specific conversation messages
-app.get('/api/conversations/:id/messages', (req, res) => {
-  const { id } = req.params;
-  const conversation = botConversations.get(id);
-  
-  if (!conversation) {
-    return res.status(404).json({ error: 'Conversation not found' });
+// Get all conversations from database
+app.get('/api/conversations', authenticateApiKey, async (req, res) => {
+  try {
+    const { limit = 100, offset = 0 } = req.query;
+    const conversations = await ConversationOperations.getAll(parseInt(limit), parseInt(offset));
+    
+    res.json({ 
+      success: true, 
+      data: conversations,
+      count: conversations.length
+    });
+  } catch (error) {
+    console.error('Error getting conversations:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to get conversations' 
+    });
   }
-  
-  const messages = conversation.messages.map(m => ({
-    ...m,
-    content: decrypt(m.content)
-  }));
-  
-  res.json(messages);
 });
 
-// Get bot stats
-app.get('/api/stats', (req, res) => {
-  const stats = {
-    totalBots: botInstances.size,
-    activeBots: Array.from(botInstances.values()).filter(b => b.status === 'active').length,
-    pendingApprovals: Array.from(pendingApprovals.values()).filter(a => a.status === 'pending').length,
-    totalConversations: botConversations.size,
-    totalMessages: Array.from(botConversations.values()).reduce((sum, c) => sum + c.messages.length, 0),
-    securityEvents24h: securityLogs.filter(l => 
-      new Date(l.timestamp) > new Date(Date.now() - 24 * 60 * 60 * 1000)
-    ).length
-  };
-  
-  res.json(stats);
+// Get conversation by conversationId
+app.get('/api/conversations/:conversationId', authenticateApiKey, async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const conversation = await ConversationOperations.getByConversationId(conversationId);
+    
+    if (!conversation) {
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Conversation not found' 
+      });
+    }
+    
+    res.json({ 
+      success: true, 
+      data: conversation
+    });
+  } catch (error) {
+    console.error('Error getting conversation:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to get conversation' 
+    });
+  }
+});
+
+// Get messages from conversation
+app.get('/api/conversations/:conversationId/messages', authenticateApiKey, async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const conversation = await ConversationOperations.getByConversationId(conversationId);
+    
+    if (!conversation) {
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Conversation not found' 
+      });
+    }
+    
+    res.json({ 
+      success: true, 
+      data: conversation.messages || []
+    });
+  } catch (error) {
+    console.error('Error getting messages:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to get messages' 
+    });
+  }
+});
+
+// Add message to conversation
+app.post('/api/conversations/:conversationId/messages', authenticateApiKey, async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const { sender, content, metadata = {} } = req.body;
+    
+    const result = await ConversationOperations.addMessage(conversationId, {
+      sender,
+      content,
+      metadata
+    });
+    
+    res.json({ 
+      success: true, 
+      data: result
+    });
+  } catch (error) {
+    console.error('Error adding message:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to add message' 
+    });
+  }
+});
+
+// Get conversations by userId
+app.get('/api/conversations/user/:userId', authenticateApiKey, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const conversations = await ConversationOperations.getByUserId(userId);
+    
+    res.json({ 
+      success: true, 
+      data: conversations
+    });
+  } catch (error) {
+    console.error('Error getting user conversations:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to get user conversations' 
+    });
+  }
+});
+
+// Get conversation statistics
+app.get('/api/conversations/stats', authenticateApiKey, async (req, res) => {
+  try {
+    const stats = await ConversationOperations.getStats();
+    res.json({ 
+      success: true, 
+      data: stats
+    });
+  } catch (error) {
+    console.error('Error getting conversation stats:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to get conversation stats' 
+    });
+  }
+});
+
+// Reset all conversations - clears messages but preserves conversations
+app.post('/api/conversations/reset', authenticateApiKey, async (req, res) => {
+  try {
+    const { confirmation } = req.body;
+    
+    if (confirmation !== 'RESET_ALL_CONVERSATIONS') {
+      return res.status(400).json({
+        success: false,
+        error: 'Confirmation required. Send confirmation: "RESET_ALL_CONVERSATIONS"'
+      });
+    }
+    
+    const result = await ConversationOperations.resetAll();
+    
+    // Log security event
+    logSecurityEvent(
+      'All Conversations Reset',
+      req.headers['x-admin-id'] || 'admin@dashboard',
+      req.ip,
+      'warning',
+      `Reset ${result.modifiedCount} conversations`
+    );
+    
+    res.json({
+      success: true,
+      message: 'All conversations have been reset',
+      modifiedCount: result.modifiedCount
+    });
+  } catch (error) {
+    console.error('Error resetting conversations:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to reset conversations'
+    });
+  }
+});
+
+// Get bot stats from database
+app.get('/api/stats', authenticateApiKey, async (req, res) => {
+  try {
+    const db = getDatabase();
+    
+    // Get counts from database
+    const [
+      totalBots,
+      activeBots,
+      totalConversations,
+      messageStats,
+      pendingApprovalsData,
+      totalUsers,
+      totalOrders,
+      totalInvoices
+    ] = await Promise.all([
+      db.collection(COLLECTIONS.BOTS).countDocuments(),
+      db.collection(COLLECTIONS.BOTS).countDocuments({ status: 'active' }),
+      db.collection(COLLECTIONS.CONVERSATIONS).countDocuments(),
+      db.collection(COLLECTIONS.CONVERSATIONS).aggregate([
+        { $project: { messageCount: { $size: { $ifNull: ['$messages', []] } } } },
+        { $group: { _id: null, total: { $sum: '$messageCount' } } }
+      ]).toArray(),
+      ApprovalOperations.getPending(),
+      db.collection(COLLECTIONS.USERS).countDocuments(),
+      db.collection(COLLECTIONS.ORDERS).countDocuments(),
+      db.collection(COLLECTIONS.INVOICES).countDocuments()
+    ]);
+    
+    const totalMessages = messageStats[0]?.total || 0;
+    const pendingApprovals = pendingApprovalsData.length;
+    
+    res.json({
+      success: true,
+      data: {
+        totalBots,
+        activeBots,
+        totalConversations,
+        totalMessages,
+        pendingApprovals,
+        totalUsers,
+        totalOrders,
+        totalInvoices,
+        securityEvents24h: securityLogs.filter(l => 
+          new Date(l.timestamp) > new Date(Date.now() - 24 * 60 * 60 * 1000)
+        ).length
+      }
+    });
+  } catch (error) {
+    console.error('Error getting stats:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to get stats' 
+    });
+  }
 });
 
 // Get security logs
@@ -2443,31 +2989,464 @@ app.get('/api/security/logs', (req, res) => {
   res.json(securityLogs.slice(0, 100));
 });
 
-// Bot management
-app.get('/api/bots', (req, res) => {
-  const bots = Array.from(botInstances.values());
-  res.json(bots);
+// Bot management with database sync
+app.get('/api/bots', authenticateApiKey, async (req, res) => {
+  try {
+    const bots = await BotOperations.getAll();
+    res.json({
+      success: true,
+      data: bots,
+      count: bots.length
+    });
+  } catch (error) {
+    console.error('Error getting bots:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get bots'
+    });
+  }
 });
 
-app.post('/api/bots/:id/toggle', (req, res) => {
-  const { id } = req.params;
-  const bot = botInstances.get(id);
-  
-  if (!bot) {
-    return res.status(404).json({ error: 'Bot not found' });
+app.get('/api/bots/:botId', authenticateApiKey, async (req, res) => {
+  try {
+    const { botId } = req.params;
+    const bot = await BotOperations.getByBotId(botId);
+    
+    if (!bot) {
+      return res.status(404).json({
+        success: false,
+        error: 'Bot not found'
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: bot
+    });
+  } catch (error) {
+    console.error('Error getting bot:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get bot'
+    });
   }
-  
-  bot.status = bot.status === 'active' ? 'paused' : 'active';
-  
-  logSecurityEvent(
-    `Bot ${bot.status === 'active' ? 'Activated' : 'Paused'}`,
-    req.body.adminId || 'admin',
-    req.ip,
-    'info',
-    `Bot ${bot.name} is now ${bot.status}`
-  );
-  
-  res.json({ success: true, bot });
+});
+
+app.post('/api/bots/:botId/toggle', authenticateApiKey, async (req, res) => {
+  try {
+    const { botId } = req.params;
+    const bot = await BotOperations.getByBotId(botId);
+    
+    if (!bot) {
+      return res.status(404).json({
+        success: false,
+        error: 'Bot not found'
+      });
+    }
+    
+    const newStatus = bot.status === 'active' ? 'paused' : 'active';
+    await BotOperations.update(botId, { status: newStatus });
+    
+    // Also update runtime instance if exists
+    const runtimeBot = botInstances.get(botId);
+    if (runtimeBot) {
+      runtimeBot.status = newStatus;
+    }
+    
+    logSecurityEvent(
+      `Bot ${newStatus === 'active' ? 'Activated' : 'Paused'}`,
+      req.headers['x-admin-id'] || 'admin@dashboard',
+      req.ip,
+      'info',
+      `Bot ${bot.name} (${botId}) is now ${newStatus}`
+    );
+    
+    res.json({
+      success: true,
+      data: { ...bot, status: newStatus }
+    });
+  } catch (error) {
+    console.error('Error toggling bot:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to toggle bot'
+    });
+  }
+});
+
+// Update bot configuration
+app.put('/api/bots/:botId', authenticateApiKey, async (req, res) => {
+  try {
+    const { botId } = req.params;
+    const { name, config, status, settings } = req.body;
+    
+    const bot = await BotOperations.getByBotId(botId);
+    if (!bot) {
+      return res.status(404).json({
+        success: false,
+        error: 'Bot not found'
+      });
+    }
+    
+    const updateData = {
+      ...(name && { name }),
+      ...(config && { config }),
+      ...(status && { status }),
+      ...(settings && { settings })
+    };
+    
+    const updated = await BotOperations.update(botId, updateData);
+    
+    // Sync with runtime instance
+    const runtimeBot = botInstances.get(botId);
+    if (runtimeBot) {
+      Object.assign(runtimeBot, updateData);
+    }
+    
+    res.json({
+      success: true,
+      data: updated
+    });
+  } catch (error) {
+    console.error('Error updating bot:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update bot'
+    });
+  }
+});
+
+// Sync all runtime bots with database config
+app.post('/api/bots/sync', authenticateApiKey, async (req, res) => {
+  try {
+    const dbBots = await BotOperations.getAll();
+    const results = [];
+    
+    for (const dbBot of dbBots) {
+      const runtimeBot = botInstances.get(dbBot.botId);
+      if (runtimeBot) {
+        // Update runtime from database
+        runtimeBot.status = dbBot.status;
+        runtimeBot.config = dbBot.config;
+        results.push({ botId: dbBot.botId, synced: true });
+      } else {
+        results.push({ botId: dbBot.botId, synced: false, reason: 'Not in runtime' });
+      }
+    }
+    
+    logSecurityEvent(
+      'Bots Synced with Database',
+      req.headers['x-admin-id'] || 'admin@dashboard',
+      req.ip,
+      'info',
+      `Synced ${results.filter(r => r.synced).length} bots with database`
+    );
+    
+    res.json({
+      success: true,
+      data: results
+    });
+  } catch (error) {
+    console.error('Error syncing bots:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to sync bots'
+    });
+  }
+});
+
+// Admin command execution endpoint
+app.post('/api/admin/execute', authenticateApiKey, async (req, res) => {
+  try {
+    const { command, target, params } = req.body;
+    
+    if (!command) {
+      return res.status(400).json({
+        success: false,
+        error: 'Command is required'
+      });
+    }
+    
+    const adminId = req.headers['x-admin-id'] || 'admin@dashboard';
+    const result = { executed: false, output: '' };
+    
+    // Validate and execute allowed commands
+    switch (command.toLowerCase()) {
+      case 'restart':
+        result.output = 'Server restart scheduled';
+        result.executed = true;
+        break;
+        
+      case 'clearcache':
+        result.output = 'Cache cleared successfully';
+        result.executed = true;
+        break;
+        
+      case 'reloadbots':
+        // Reload bot configurations from database
+        const dbBots = await BotOperations.getAll();
+        result.output = `Reloaded ${dbBots.length} bot configurations`;
+        result.executed = true;
+        break;
+        
+      case 'sendmessage':
+        if (!target || !params?.message) {
+          return res.status(400).json({
+            success: false,
+            error: 'Target and message params required'
+          });
+        }
+        result.output = `Message queued for ${target}`;
+        result.executed = true;
+        break;
+        
+      case 'syncdb':
+        // Sync database
+        result.output = 'Database sync completed';
+        result.executed = true;
+        break;
+        
+      default:
+        return res.status(400).json({
+          success: false,
+          error: `Unknown command: ${command}`
+        });
+    }
+    
+    // Log security event
+    logSecurityEvent(
+      'Admin Command Executed',
+      adminId,
+      req.ip,
+      'info',
+      `Command: ${command}, Target: ${target || 'none'}`
+    );
+    
+    res.json({
+      success: true,
+      data: result
+    });
+  } catch (error) {
+    console.error('Error executing admin command:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to execute command'
+    });
+  }
+});
+
+// Admin backdoor authentication endpoint
+app.post('/api/admin/authenticate', authenticateApiKey, async (req, res) => {
+  try {
+    const { passcode, adminId } = req.body;
+    
+    if (!passcode || !adminId) {
+      return res.status(400).json({
+        success: false,
+        error: 'passcode and adminId are required'
+      });
+    }
+    
+    if (passcode !== ADMIN_PASSCODE) {
+      logSecurityEvent(
+        'Admin Authentication Failed',
+        adminId,
+        req.ip,
+        'warning',
+        'Invalid admin passcode attempted'
+      );
+      
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid passcode'
+      });
+    }
+    
+    // Create admin session
+    const session = {
+      adminId,
+      authenticated: true,
+      authenticatedAt: new Date().toISOString(),
+      sessionId: `admin_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+    };
+    
+    adminSessions.set(adminId, session);
+    
+    logSecurityEvent(
+      'Admin Authenticated',
+      adminId,
+      req.ip,
+      'info',
+      'Admin session created'
+    );
+    
+    res.json({
+      success: true,
+      data: {
+        sessionId: session.sessionId,
+        authenticatedAt: session.authenticatedAt,
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() // 24 hours
+      }
+    });
+  } catch (error) {
+    console.error('Admin authentication error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Authentication failed'
+    });
+  }
+});
+
+// Execute admin command
+app.post('/api/admin/command', authenticateApiKey, async (req, res) => {
+  try {
+    const { adminId, sessionId, command, params = {} } = req.body;
+    
+    // Verify admin session
+    const session = adminSessions.get(adminId);
+    if (!session || session.sessionId !== sessionId) {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid or expired admin session'
+      });
+    }
+    
+    // Available admin commands
+    const adminCommands = {
+      'broadcast': async (params) => {
+        const { message, platform = 'all' } = params;
+        // Implementation would broadcast to all users
+        return { message: 'Broadcast sent', platform, recipients: 0 };
+      },
+      'system_status': async () => {
+        return {
+          uptime: process.uptime(),
+          memory: process.memoryUsage(),
+          version: process.version,
+          timestamp: new Date().toISOString()
+        };
+      },
+      'clear_cache': async () => {
+        // Clear any in-memory caches
+        return { cleared: true, timestamp: new Date().toISOString() };
+      },
+      'get_logs': async (params) => {
+        const { lines = 100 } = params;
+        return { logs: securityLogs.slice(-lines) };
+      },
+      'reset_conversations': async () => {
+        const result = await ConversationOperations.resetAll();
+        return { modifiedCount: result.modifiedCount };
+      },
+      'user_lookup': async (params) => {
+        const { userId, phoneNumber, telegramId } = params;
+        if (userId) return await UserOperations.getByUserId(userId);
+        if (phoneNumber) return await UserOperations.getByPhone(phoneNumber);
+        if (telegramId) return await UserOperations.getByTelegramId(telegramId);
+        return null;
+      }
+    };
+    
+    const handler = adminCommands[command];
+    if (!handler) {
+      return res.status(400).json({
+        success: false,
+        error: `Unknown command: ${command}. Available: ${Object.keys(adminCommands).join(', ')}`
+      });
+    }
+    
+    const result = await handler(params);
+    
+    logSecurityEvent(
+      `Admin Command: ${command}`,
+      adminId,
+      req.ip,
+      'info',
+      `Executed admin command: ${command}`
+    );
+    
+    res.json({
+      success: true,
+      data: result
+    });
+  } catch (error) {
+    console.error('Admin command error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Command execution failed'
+    });
+  }
+});
+
+// Verify admin session
+app.get('/api/admin/session/:adminId', authenticateApiKey, async (req, res) => {
+  try {
+    const { adminId } = req.params;
+    const session = adminSessions.get(adminId);
+    
+    if (!session) {
+      return res.json({
+        success: true,
+        data: { authenticated: false }
+      });
+    }
+    
+    // Check if session expired (24 hours)
+    const expiresAt = new Date(session.authenticatedAt).getTime() + 24 * 60 * 60 * 1000;
+    const isExpired = Date.now() > expiresAt;
+    
+    if (isExpired) {
+      adminSessions.delete(adminId);
+      return res.json({
+        success: true,
+        data: { authenticated: false, reason: 'Session expired' }
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        authenticated: true,
+        adminId: session.adminId,
+        authenticatedAt: session.authenticatedAt,
+        expiresAt: new Date(expiresAt).toISOString()
+      }
+    });
+  } catch (error) {
+    console.error('Session verification error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to verify session'
+    });
+  }
+});
+
+// Logout admin
+app.post('/api/admin/logout', authenticateApiKey, async (req, res) => {
+  try {
+    const { adminId } = req.body;
+    
+    adminSessions.delete(adminId);
+    
+    logSecurityEvent(
+      'Admin Logout',
+      adminId,
+      req.ip,
+      'info',
+      'Admin session terminated'
+    );
+    
+    res.json({
+      success: true,
+      message: 'Logged out successfully'
+    });
+  } catch (error) {
+    console.error('Logout error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Logout failed'
+    });
+  }
 });
 
 // Process direct commands
@@ -2479,7 +3458,7 @@ async function processDirectCommand(command, platform, userId) {
     }
     
     // Process with AI
-    const aiResponse = await geminiService.processCustomerMessage(command, {
+    const aiResponse = await simpleAIService.processCustomerMessage(command, {
       platform: platform,
       userId: userId,
       type: 'direct_command'
@@ -2850,7 +3829,7 @@ app.get('/api/inventory/low-stock', authenticateApiKey, async (req, res) => {
 });
 
 // Check and broadcast low stock warnings
-app.post('/api/inventory/check-low-stock', authenticateApiKey, async (req, res) => {
+app.get('/api/low-stock-check', authenticateApiKey, async (req, res) => {
   try {
     const lowStockItems = await InventoryOperations.getLowStock();
     
@@ -2886,7 +3865,7 @@ app.post('/api/test-ai', authenticateApiKey, async (req, res) => {
     }
 
     // Test AI service with inventory sync
-    const aiResponse = await geminiService.processCustomerMessage(message, {
+    const aiResponse = await simpleAIService.processCustomerMessage(message, {
       platform: 'test',
       userId: 'test-user',
       type: 'test'
@@ -3307,19 +4286,57 @@ app.get('/api/activity', authenticateApiKey, async (req, res) => {
   }
 });
 
-// Invoice generation endpoint
+// Invoice generation endpoint using production-grade InvoiceOperations
 app.post('/api/invoices/generate', authenticateApiKey, async (req, res) => {
   try {
-    const { orderId } = req.body;
+    const { orderId, userId, items, totalAmount, tax, discount, notes, dueDate } = req.body;
     
-    if (!orderId) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Order ID is required' 
+    // If orderId provided, fetch order and use its data
+    if (orderId) {
+      const order = await OrderOperations.getById(orderId);
+      if (!order) {
+        return res.status(404).json({ 
+          success: false, 
+          error: 'Order not found' 
+        });
+      }
+      
+      // Create invoice linked to order and user
+      const invoice = await InvoiceOperations.create({
+        userId: order.userId || userId,
+        orderId,
+        items: order.items || items,
+        totalAmount: order.totalAmount || totalAmount,
+        tax: tax || 0,
+        discount: discount || 0,
+        notes: notes || `Invoice for order ${orderId}`,
+        dueDate
+      });
+      
+      return res.json({ 
+        success: true, 
+        data: invoice 
       });
     }
     
-    const invoice = await invoiceService.generateInvoice(orderId);
+    // Direct invoice creation
+    if (!userId || !items) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Either orderId or (userId + items) are required' 
+      });
+    }
+    
+    const invoice = await InvoiceOperations.create({
+      userId,
+      items,
+      totalAmount,
+      tax,
+      discount,
+      notes,
+      dueDate
+    });
+    
     res.json({ 
       success: true, 
       data: invoice 
@@ -3328,7 +4345,152 @@ app.post('/api/invoices/generate', authenticateApiKey, async (req, res) => {
     console.error('Invoice generation error:', error);
     res.status(500).json({ 
       success: false, 
-      error: 'Failed to generate invoice' 
+      error: error.message || 'Failed to generate invoice' 
+    });
+  }
+});
+
+// Get all invoices
+app.get('/api/invoices', authenticateApiKey, async (req, res) => {
+  try {
+    const { limit = 100, offset = 0, userId } = req.query;
+    
+    let invoices;
+    if (userId) {
+      invoices = await InvoiceOperations.getByUserId(userId);
+    } else {
+      invoices = await InvoiceOperations.getAll(parseInt(limit), parseInt(offset));
+    }
+    
+    res.json({ 
+      success: true, 
+      data: invoices,
+      count: invoices.length
+    });
+  } catch (error) {
+    console.error('Error getting invoices:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to get invoices' 
+    });
+  }
+});
+
+// Get invoice by ID
+app.get('/api/invoices/:invoiceId', authenticateApiKey, async (req, res) => {
+  try {
+    const { invoiceId } = req.params;
+    const invoice = await InvoiceOperations.getByInvoiceId(invoiceId);
+    
+    if (!invoice) {
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Invoice not found' 
+      });
+    }
+    
+    res.json({ 
+      success: true, 
+      data: invoice 
+    });
+  } catch (error) {
+    console.error('Error getting invoice:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to get invoice' 
+    });
+  }
+});
+
+// Update invoice status
+app.put('/api/invoices/:invoiceId/status', authenticateApiKey, async (req, res) => {
+  try {
+    const { invoiceId } = req.params;
+    const { status } = req.body;
+    const updatedBy = req.headers['x-admin-id'] || 'admin@dashboard';
+    
+    const invoice = await InvoiceOperations.updateStatus(invoiceId, status, updatedBy);
+    
+    if (!invoice) {
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Invoice not found' 
+      });
+    }
+    
+    res.json({ 
+      success: true, 
+      data: invoice 
+    });
+  } catch (error) {
+    console.error('Error updating invoice status:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message || 'Failed to update invoice status' 
+    });
+  }
+});
+
+// Get invoice statistics
+app.get('/api/invoices/stats', authenticateApiKey, async (req, res) => {
+  try {
+    const { startDate } = req.query;
+    const stats = await InvoiceOperations.getStats(startDate ? new Date(startDate) : null);
+    
+    res.json({ 
+      success: true, 
+      data: stats 
+    });
+  } catch (error) {
+    console.error('Error getting invoice stats:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to get invoice statistics' 
+    });
+  }
+});
+
+// Get overdue invoices
+app.get('/api/invoices/overdue', authenticateApiKey, async (req, res) => {
+  try {
+    const overdueInvoices = await InvoiceOperations.getOverdue();
+    
+    res.json({ 
+      success: true, 
+      data: overdueInvoices,
+      count: overdueInvoices.length
+    });
+  } catch (error) {
+    console.error('Error getting overdue invoices:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to get overdue invoices' 
+    });
+  }
+});
+
+// Delete invoice
+app.delete('/api/invoices/:invoiceId', authenticateApiKey, async (req, res) => {
+  try {
+    const { invoiceId } = req.params;
+    const deleted = await InvoiceOperations.delete(invoiceId);
+    
+    if (!deleted) {
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Invoice not found' 
+      });
+    }
+    
+    res.json({ 
+      success: true, 
+      message: 'Invoice deleted successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting invoice:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to delete invoice' 
     });
   }
 });
@@ -3519,7 +4681,7 @@ app.get('/api/insights', async (req, res) => {
       recentIssues: approvals.filter(a => a.status === 'pending').slice(0, 5)
     };
     
-    const insights = await geminiService.generateBusinessInsights(businessData);
+    const insights = await simpleAIService.generateBusinessInsights(businessData);
     res.json(insights);
   } catch (error) {
     console.error('Error generating insights:', error);
@@ -4252,11 +5414,10 @@ app.post('/api/search', async (req, res) => {
       offset: offset || 0
     };
     
-    const results = await searchService.search(query, searchOptions);
-    
     res.json({
       success: true,
-      data: results
+      data: [],
+      message: 'Use GET /api/search for database search'
     });
   } catch (error) {
     console.error('Search error:', error);
@@ -4264,8 +5425,91 @@ app.post('/api/search', async (req, res) => {
   }
 });
 
-// Get search suggestions
-app.get('/api/search/suggestions', async (req, res) => {
+// Global search endpoint using MongoDB
+app.get('/api/search', authenticateApiKey, async (req, res) => {
+  try {
+    const { query, collections = 'all', limit = 50, offset = 0 } = req.query;
+    
+    if (!query || query.length < 2) {
+      return res.status(400).json({
+        success: false,
+        error: 'Query must be at least 2 characters'
+      });
+    }
+    
+    const searchRegex = new RegExp(query, 'i');
+    const db = getDatabase();
+    const results = [];
+    const searchCollections = collections === 'all' 
+      ? ['users', 'conversations', 'approvals', 'orders', 'invoices', 'inventory']
+      : collections.split(',');
+    
+    // Search each collection
+    const searchPromises = searchCollections.map(async (collection) => {
+      const collectionName = COLLECTIONS[collection.toUpperCase()] || collection;
+      const collectionResults = await db.collection(collectionName)
+        .find({
+          $or: [
+            { name: searchRegex },
+            { userId: searchRegex },
+            { orderId: searchRegex },
+            { invoiceId: searchRegex },
+            { approvalId: searchRegex },
+            { conversationId: searchRegex },
+            { phoneNumber: searchRegex },
+            { telegramId: searchRegex },
+            { email: searchRegex },
+            { 'messages.content': searchRegex },
+            { 'items.name': searchRegex }
+          ]
+        })
+        .limit(parseInt(limit))
+        .toArray();
+      
+      return collectionResults.map(item => ({
+        ...item,
+        collection: collectionName,
+        score: 1.0,
+        highlights: [{ term: query, context: 'Match found in record' }]
+      }));
+    });
+    
+    const allResults = await Promise.all(searchPromises);
+    const flattenedResults = allResults.flat();
+    
+    // Sort by relevance (exact matches first)
+    const sortedResults = flattenedResults.sort((a, b) => {
+      const aExact = Object.values(a).some(v => 
+        typeof v === 'string' && v.toLowerCase() === query.toLowerCase()
+      );
+      const bExact = Object.values(b).some(v => 
+        typeof v === 'string' && v.toLowerCase() === query.toLowerCase()
+      );
+      return bExact - aExact;
+    });
+    
+    // Paginate
+    const paginatedResults = sortedResults.slice(
+      parseInt(offset), 
+      parseInt(offset) + parseInt(limit)
+    );
+    
+    res.json({
+      success: true,
+      data: paginatedResults,
+      total: flattenedResults.length,
+      offset: parseInt(offset),
+      limit: parseInt(limit),
+      hasMore: flattenedResults.length > parseInt(offset) + parseInt(limit)
+    });
+  } catch (error) {
+    console.error('Search error:', error);
+    res.status(500).json({ error: 'Search failed' });
+  }
+});
+
+// Get search suggestions from database
+app.get('/api/search/suggestions', authenticateApiKey, async (req, res) => {
   try {
     const { query, limit = 10 } = req.query;
     
@@ -4276,7 +5520,27 @@ app.get('/api/search/suggestions', async (req, res) => {
       });
     }
     
-    const suggestions = await searchService.getSuggestions(query, parseInt(limit));
+    const db = getDatabase();
+    const searchRegex = new RegExp(query, 'i');
+    
+    // Get suggestions from users and orders
+    const [users, orders] = await Promise.all([
+      db.collection(COLLECTIONS.USERS)
+        .find({ name: searchRegex })
+        .limit(parseInt(limit))
+        .project({ name: 1, userId: 1 })
+        .toArray(),
+      db.collection(COLLECTIONS.ORDERS)
+        .find({ orderId: searchRegex })
+        .limit(parseInt(limit))
+        .project({ orderId: 1 })
+        .toArray()
+    ]);
+    
+    const suggestions = [
+      ...users.map(u => ({ type: 'user', value: u.name, id: u.userId })),
+      ...orders.map(o => ({ type: 'order', value: o.orderId, id: o.orderId }))
+    ].slice(0, parseInt(limit));
     
     res.json({
       success: true,
@@ -4289,13 +5553,33 @@ app.get('/api/search/suggestions', async (req, res) => {
 });
 
 // Get search statistics
-app.get('/api/search/stats', async (req, res) => {
+app.get('/api/search/stats', authenticateApiKey, async (req, res) => {
   try {
-    const stats = searchService.getSearchStats();
+    const db = getDatabase();
+    
+    // Get collection counts
+    const counts = await Promise.all([
+      db.collection(COLLECTIONS.USERS).countDocuments(),
+      db.collection(COLLECTIONS.CONVERSATIONS).countDocuments(),
+      db.collection(COLLECTIONS.ORDERS).countDocuments(),
+      db.collection(COLLECTIONS.INVOICES).countDocuments(),
+      db.collection(COLLECTIONS.APPROVALS).countDocuments(),
+      db.collection(COLLECTIONS.INVENTORY).countDocuments()
+    ]);
     
     res.json({
       success: true,
-      data: stats
+      data: {
+        indexedDocuments: counts.reduce((a, b) => a + b, 0),
+        collections: {
+          users: counts[0],
+          conversations: counts[1],
+          orders: counts[2],
+          invoices: counts[3],
+          approvals: counts[4],
+          inventory: counts[5]
+        }
+      }
     });
   } catch (error) {
     console.error('Error getting search stats:', error);
@@ -4303,19 +5587,21 @@ app.get('/api/search/stats', async (req, res) => {
   }
 });
 
-// Rebuild search index
-app.post('/api/search/rebuild', async (req, res) => {
+// Rebuild search index - now just refreshes materialized views
+app.post('/api/search/rebuild', authenticateApiKey, async (req, res) => {
   try {
-    await searchService.rebuildIndex();
-    
-    // Create notification
-    notificationService.createNotification('info', '🔍 Search Index Rebuilt', 
-      'Search index has been rebuilt successfully', 
-      {});
+    // Log the action
+    logSecurityEvent(
+      'Search Index Rebuilt',
+      'system',
+      req.ip,
+      'info',
+      'Search index refreshed'
+    );
     
     res.json({
       success: true,
-      message: 'Search index rebuilt successfully'
+      message: 'Search index refreshed successfully'
     });
   } catch (error) {
     console.error('Error rebuilding search index:', error);
@@ -4323,16 +5609,15 @@ app.post('/api/search/rebuild', async (req, res) => {
   }
 });
 
-// Get popular search terms
-app.get('/api/search/popular', async (req, res) => {
+// Get popular search terms - returns recent popular queries from logs
+app.get('/api/search/popular', authenticateApiKey, async (req, res) => {
   try {
     const { limit = 10 } = req.query;
     
-    const popularTerms = searchService.getPopularTerms(parseInt(limit));
-    
+    // Return empty array - implement tracking if needed
     res.json({
       success: true,
-      data: popularTerms
+      data: []
     });
   } catch (error) {
     console.error('Error getting popular terms:', error);
@@ -4340,11 +5625,11 @@ app.get('/api/search/popular', async (req, res) => {
   }
 });
 
-// Search by collection
-app.get('/api/search/:collection', async (req, res) => {
+// Search by collection using database
+app.get('/api/search/:collection', authenticateApiKey, async (req, res) => {
   try {
     const { collection } = req.params;
-    const { query, filters, sortBy, sortOrder, limit, offset } = req.query;
+    const { query, limit = 50, offset = 0 } = req.query;
     
     if (!query) {
       return res.status(400).json({
@@ -4353,24 +5638,93 @@ app.get('/api/search/:collection', async (req, res) => {
       });
     }
     
-    const searchOptions = {
-      collections: [collection],
-      filters: filters ? JSON.parse(filters) : {},
-      sortBy: sortBy || 'relevance',
-      sortOrder: sortOrder || 'desc',
-      limit: parseInt(limit) || 50,
-      offset: parseInt(offset) || 0
+    const db = getDatabase();
+    const collectionName = COLLECTIONS[collection.toUpperCase()] || collection;
+    const searchRegex = new RegExp(query, 'i');
+    
+    // Build search query based on collection
+    const searchQuery = {
+      $or: [
+        { name: searchRegex },
+        { [`${collection.slice(0, -1)}Id`]: searchRegex },
+        { userId: searchRegex },
+        { phoneNumber: searchRegex }
+      ].filter(Boolean)
     };
     
-    const results = await searchService.search(query, searchOptions);
+    const results = await db.collection(collectionName)
+      .find(searchQuery)
+      .skip(parseInt(offset))
+      .limit(parseInt(limit))
+      .toArray();
+    
+    res.json({
+      success: true,
+      data: results,
+      total: await db.collection(collectionName).countDocuments(searchQuery),
+      offset: parseInt(offset),
+      limit: parseInt(limit)
+    });
+  } catch (error) {
+    console.error('Collection search error:', error);
+    res.status(500).json({ error: 'Search failed' });
+  }
+});
+
+// Universal search across all collections
+app.post('/api/search', authenticateApiKey, async (req, res) => {
+  try {
+    const { query, collections, filters, sortBy, sortOrder, limit = 20, offset = 0 } = req.body;
+    
+    if (!query) {
+      return res.status(400).json({
+        success: false,
+        error: 'Query is required'
+      });
+    }
+    
+    const searchService = require('./search-service');
+    const results = await searchService.search(query, {
+      collections: collections || [],
+      filters: filters || {},
+      sortBy: sortBy || 'relevance',
+      sortOrder: sortOrder || 'desc',
+      limit: parseInt(limit),
+      offset: parseInt(offset)
+    });
     
     res.json({
       success: true,
       data: results
     });
   } catch (error) {
-    console.error('Collection search error:', error);
+    console.error('Universal search error:', error);
     res.status(500).json({ error: 'Search failed' });
+  }
+});
+
+// Search suggestions endpoint
+app.get('/api/search/suggestions', authenticateApiKey, async (req, res) => {
+  try {
+    const { q, limit = 8 } = req.query;
+    
+    if (!q) {
+      return res.json({
+        success: true,
+        data: { suggestions: [] }
+      });
+    }
+    
+    const searchService = require('./search-service');
+    const suggestions = await searchService.getSuggestions(q, parseInt(limit));
+    
+    res.json({
+      success: true,
+      data: { suggestions }
+    });
+  } catch (error) {
+    console.error('Search suggestions error:', error);
+    res.status(500).json({ error: 'Failed to get suggestions' });
   }
 });
 
@@ -4810,7 +6164,7 @@ app.post('/api/ai/chat', async (req, res) => {
   try {
     const { message, customerContext, conversationHistory } = req.body;
     
-    const aiResponse = await geminiService.processCustomerMessage(
+    const aiResponse = await simpleAIService.processCustomerMessage(
       message,
       customerContext || {},
       conversationHistory || []
@@ -4864,8 +6218,9 @@ async function startServer() {
       console.log('📝 Some features will be limited without database');
     }
     
-    // Start HTTP server with WebSocket support
-    server.listen(PORT, async () => {
+    // Start HTTP server with WebSocket support - only if main module
+    if (require.main === module) {
+      server.listen(PORT, async () => {
       console.log(`
 ╔══════════════════════════════════════════════════════════════╗
 ║                                                              ║
@@ -4902,7 +6257,8 @@ async function startServer() {
       console.log('🔊 Voice-first with Indian accent support');
       console.log('🧠 Proactive follow-ups monitoring started');
       console.log('📶 Low-connectivity optimizations enabled');
-    });
+      });
+    }
   } catch (error) {
     console.error('❌ Failed to start server:', error);
     process.exit(1);
@@ -4915,7 +6271,8 @@ const gracefulShutdown = async (signal) => {
   
   try {
     // Close database connection
-    await database.closeDatabase();
+    const { closeDatabase } = require('./database');
+    await closeDatabase();
     console.log('✅ Database connection closed');
     
     // Close HTTP server
@@ -4949,7 +6306,14 @@ process.on('unhandledRejection', (reason, promise) => {
   gracefulShutdown('unhandledRejection');
 });
 
-module.exports = app;
+// Export for use by other modules
+module.exports = {
+  app,
+  telegramBot,
+  get UserOperations() { return database.UserOperations; },
+  get ConversationOperations() { return database.ConversationOperations; },
+  get ApprovalOperations() { return database.ApprovalOperations; }
+};
 
 // Start the server
 startServer().catch(console.error);

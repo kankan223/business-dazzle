@@ -14,12 +14,14 @@ class SearchService {
    */
   async initializeSearchIndex() {
     try {
+      // Wait for database to be available
       const { getDatabase } = require('./database');
-      const db = getDatabase();
+      let db = getDatabase();
       
-      // Check if database is available
+      // If database not connected, wait and retry
       if (!db) {
-        console.warn('⚠️ Database not available, skipping search index initialization');
+        console.warn('⚠️ Database not yet connected, skipping search index initialization');
+        setTimeout(() => this.initializeSearchIndex(), 2000); // Retry after 2 seconds
         return;
       }
       

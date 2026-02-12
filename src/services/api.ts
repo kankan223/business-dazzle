@@ -115,8 +115,11 @@ class WebSocketService {
     return new Promise((resolve, reject) => {
       try {
         this.socket = io(WS_URL, {
-          transports: ['websocket'],
-          autoConnect: true
+          transports: ['polling', 'websocket'],
+          autoConnect: true,
+          reconnection: true,
+          reconnectionAttempts: 5,
+          reconnectionDelay: 1000
         });
 
         this.socket.on('connect', () => {
@@ -296,29 +299,45 @@ export class ApiService {
   }
 
   // API endpoints
+  private getAuthHeaders(): HeadersInit {
+    return {
+      'Authorization': `Bearer ${ADMIN_API_KEY}`
+    };
+  }
+
   async getBots(): Promise<Bot[]> {
-    const response = await fetch(`${API_BASE_URL}/api/bots`);
+    const response = await fetch(`${API_BASE_URL}/api/bots`, {
+      headers: this.getAuthHeaders()
+    });
     if (!response.ok) throw new Error('Failed to fetch bots');
-    return response.json();
+    const result = await response.json();
+    return result.data || result;
   }
 
   async getConversations(): Promise<Conversation[]> {
-    const response = await fetch(`${API_BASE_URL}/api/conversations`);
+    const response = await fetch(`${API_BASE_URL}/api/conversations`, {
+      headers: this.getAuthHeaders()
+    });
     if (!response.ok) throw new Error('Failed to fetch conversations');
-    return response.json();
+    const result = await response.json();
+    return result.data || result;
   }
 
   async getApprovals(): Promise<Approval[]> {
-    const response = await fetch(`${API_BASE_URL}/api/approvals`);
+    const response = await fetch(`${API_BASE_URL}/api/approvals`, {
+      headers: this.getAuthHeaders()
+    });
     if (!response.ok) throw new Error('Failed to fetch approvals');
-    return response.json();
+    const result = await response.json();
+    return result.data || result;
   }
 
   async updateApproval(id: string, status: 'approved' | 'rejected', resolvedBy: string): Promise<void> {
-    const response = await fetch(`${API_BASE_URL}/api/approvals/${id}/update`, {
+    const response = await fetch(`${API_BASE_URL}/api/approvals/${id}/resolve`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Authorization': `Bearer ${ADMIN_API_KEY}`
       },
       body: JSON.stringify({ status, resolvedBy }),
     });
@@ -326,21 +345,30 @@ export class ApiService {
   }
 
   async getStats(): Promise<Stats> {
-    const response = await fetch(`${API_BASE_URL}/api/stats`);
+    const response = await fetch(`${API_BASE_URL}/api/stats`, {
+      headers: this.getAuthHeaders()
+    });
     if (!response.ok) throw new Error('Failed to fetch stats');
-    return response.json();
+    const result = await response.json();
+    return result.data || result;
   }
 
   async getInsights(): Promise<AIInsights> {
-    const response = await fetch(`${API_BASE_URL}/api/insights`);
+    const response = await fetch(`${API_BASE_URL}/api/insights`, {
+      headers: this.getAuthHeaders()
+    });
     if (!response.ok) throw new Error('Failed to fetch insights');
-    return response.json();
+    const result = await response.json();
+    return result.data || result;
   }
 
   async getSecurityLogs(): Promise<SecurityLog[]> {
-    const response = await fetch(`${API_BASE_URL}/api/security/logs`);
+    const response = await fetch(`${API_BASE_URL}/api/security/logs`, {
+      headers: this.getAuthHeaders()
+    });
     if (!response.ok) throw new Error('Failed to fetch security logs');
-    return response.json();
+    const result = await response.json();
+    return result.data || result;
   }
 
   // AI chat endpoint
@@ -355,6 +383,7 @@ export class ApiService {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Authorization': `Bearer ${ADMIN_API_KEY}`
       },
       body: JSON.stringify({ message, customerContext, conversationHistory }),
     });
@@ -387,7 +416,7 @@ export class ApiService {
   }
 
   static async directCommand(command: string, platform: string = 'web', userId?: string): Promise<any> {
-    const response = await fetch(`${API_BASE_URL}//api/direct-command`, {
+    const response = await fetch(`${API_BASE_URL}/api/direct-command`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -399,7 +428,11 @@ export class ApiService {
   }
 
   static async getSpeechLanguages(): Promise<any> {
-    const response = await fetch(`${API_BASE_URL}/api/speech-languages`);
+    const response = await fetch(`${API_BASE_URL}/api/speech-languages`, {
+      headers: {
+        'Authorization': `Bearer ${ADMIN_API_KEY}`
+      }
+    });
     return response.json();
   }
 
@@ -812,33 +845,6 @@ export class ApiService {
     return result.data;
   }
 
-  // Search API methods
-  async performSearch(searchParams: {
-    query: string;
-    collections?: string[];
-    filters?: any;
-    sortBy?: string;
-    sortOrder?: string;
-    limit?: number;
-    offset?: number;
-  }): Promise<any> {
-    const response = await fetch(`${API_BASE_URL}/api/search`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(searchParams)
-    });
-    if (!response.ok) throw new Error('Search failed');
-    const result = await response.json();
-    return result.data;
-  }
-
-  async getSearchSuggestions(query: string, limit: number = 10): Promise<string[]> {
-    const response = await fetch(`${API_BASE_URL}/api/search/suggestions?query=${encodeURIComponent(query)}&limit=${limit}`);
-    if (!response.ok) throw new Error('Failed to get search suggestions');
-    const result = await response.json();
-    return result.data;
-  }
-
   async getSearchStats(): Promise<any> {
     const response = await fetch(`${API_BASE_URL}/api/search/stats`);
     if (!response.ok) throw new Error('Failed to get search stats');
@@ -890,10 +896,53 @@ export class ApiService {
       queryParams.append('offset', params.offset.toString());
     }
     
-    const response = await fetch(`${API_BASE_URL}/api/search/${collection}?${queryParams}`);
+    const response = await fetch(`${API_BASE_URL}/api/search/${collection}?${queryParams}`, {
+      headers: {
+        'Authorization': `Bearer ${ADMIN_API_KEY}`
+      }
+    });
     if (!response.ok) throw new Error('Collection search failed');
     const result = await response.json();
     return result.data;
+  }
+
+  // Universal search across all collections
+  async performSearch(params: {
+    query: string;
+    collections?: string[];
+    filters?: any;
+    sortBy?: string;
+    sortOrder?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<{ results: any[]; total: number; hasMore: boolean }> {
+    const response = await fetch(`${API_BASE_URL}/api/search`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${ADMIN_API_KEY}`
+      },
+      body: JSON.stringify(params)
+    });
+    if (!response.ok) throw new Error('Search failed');
+    const result = await response.json();
+    return {
+      results: result.data?.results || result.results || [],
+      total: result.data?.total || result.total || 0,
+      hasMore: result.data?.hasMore || result.hasMore || false
+    };
+  }
+
+  // Get search suggestions
+  async getSearchSuggestions(query: string, limit: number = 8): Promise<string[]> {
+    const response = await fetch(`${API_BASE_URL}/api/search/suggestions?q=${encodeURIComponent(query)}&limit=${limit}`, {
+      headers: {
+        'Authorization': `Bearer ${ADMIN_API_KEY}`
+      }
+    });
+    if (!response.ok) throw new Error('Failed to get suggestions');
+    const result = await response.json();
+    return result.data?.suggestions || result.suggestions || [];
   }
 }
 
