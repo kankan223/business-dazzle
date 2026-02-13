@@ -34,7 +34,6 @@ export function DebugPanel() {
 
       eventSource.onopen = () => {
         setIsConnected(true);
-        console.log('🧪 Debug stream connected');
       };
 
       eventSource.onmessage = (event) => {
@@ -62,7 +61,6 @@ export function DebugPanel() {
 
       eventSource.addEventListener("close", () => {
         setIsConnected(false);
-        console.log('🧪 Debug stream disconnected');
       });
     };
 

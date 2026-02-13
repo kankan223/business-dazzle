@@ -6,7 +6,7 @@
  * CHANGE: New service to handle intent extraction and action execution
  */
 
-const geminiService = require('./gemini-service');
+const { SimpleAIService } = require('./simple-ai-service');
 const indianLanguageProcessor = require('./indian-language-processor');
 const { 
   ApprovalOperations, 
@@ -18,7 +18,7 @@ const {
 
 class IntentProcessor {
   constructor() {
-    this.aiService = geminiService;
+    this.aiService = new SimpleAIService();
     this.intentPatterns = this.initializeIntentPatterns();
     this.businessContext = this.loadBusinessContext();
   }

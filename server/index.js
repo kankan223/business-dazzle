@@ -173,7 +173,8 @@ const app = express();
 app.get('/health', async (req, res) => {
   try {
     // Check database health
-    const dbHealth = await database.checkDatabaseHealth();
+    const { checkDatabaseHealth } = require('./database');
+    const dbHealth = await checkDatabaseHealth();
     
     const health = {
       status: dbHealth.status === 'healthy' ? 'healthy' : 'degraded',
@@ -6310,9 +6311,9 @@ process.on('unhandledRejection', (reason, promise) => {
 module.exports = {
   app,
   telegramBot,
-  get UserOperations() { return database.UserOperations; },
-  get ConversationOperations() { return database.ConversationOperations; },
-  get ApprovalOperations() { return database.ApprovalOperations; }
+  get UserOperations() { return require('./database').UserOperations; },
+  get ConversationOperations() { return require('./database').ConversationOperations; },
+  get ApprovalOperations() { return require('./database').ApprovalOperations; }
 };
 
 // Start the server

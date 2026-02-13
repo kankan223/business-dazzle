@@ -233,8 +233,6 @@ export default function App() {
     });
 
     apiService.onConversationUpdated((data) => {
-      console.log('Conversation updated:', data);
-      
       // Update conversations list
       setConversations(prev => {
         const existingIndex = prev.findIndex(conv => conv.customerId === data.customerId);
@@ -265,8 +263,6 @@ export default function App() {
     });
 
     apiService.onNewMessage((data) => {
-      console.log('New message received:', data);
-      
       // Update conversations if message belongs to a conversation
       if (data.conversationId) {
         setConversations(prev => prev.map(conv => 
@@ -280,14 +276,12 @@ export default function App() {
     });
 
     apiService.onBotUpdate((data) => {
-      console.log('Bot update:', data);
       setBots(prev => prev.map(bot => 
         bot.id === data.id ? { ...bot, ...data } : bot
       ));
     });
 
     apiService.onOrderUpdate((data) => {
-      console.log('Order update:', data);
       setOrders(prev => prev.map(order => 
         order.id === data.id ? { ...order, ...data } : order
       ));
@@ -295,7 +289,6 @@ export default function App() {
 
     // Inventory event listeners
     apiService.onInventoryUpdate((data) => {
-      console.log('Inventory update:', data);
       if (data.action === 'added') {
         setInventory(prev => [...prev, data.item]);
       } else if (data.action === 'updated') {
@@ -309,12 +302,10 @@ export default function App() {
     });
 
     apiService.onLowStockWarning((data) => {
-      console.log('Low stock warning:', data);
       toast.warning(`Low stock warning: ${data.item.name} (${data.item.quantity} ${data.item.unit} remaining)`);
     });
 
     apiService.onNewOrder((data) => {
-      console.log('New order:', data);
       setOrders(prev => [data, ...prev]);
       toast.success(`New order received: ${data.orderId}`);
     });
@@ -1816,8 +1807,8 @@ export default function App() {
                     />
                     
                     <DirectCommand 
-                      onResponse={(response) => {
-                        console.log('Command response:', response);
+                      onResponse={() => {
+                        // Command response received
                       }}
                     />
                   </div>

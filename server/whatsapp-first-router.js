@@ -5,7 +5,7 @@
  */
 
 const express = require('express');
-const geminiService = require('./gemini-service');
+const { SimpleAIService } = require('./simple-ai-service');
 const intentProcessor = require('./intent-processor');
 const indianLanguageProcessor = require('./indian-language-processor');
 const proactiveIntelligenceService = require('./proactive-intelligence-service');

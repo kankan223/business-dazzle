@@ -149,7 +149,7 @@ export const Notifications: React.FC<NotificationsProps> = ({ className = '', on
     
     // Handle navigation based on notification type/data
     if (notification.data?.orderId) {
-      console.log('Navigate to order:', notification.data.orderId);
+      // Navigate to order
     }
     if (notification.data?.approvalId || notification.type === 'approval') {
       // Navigate to approvals tab

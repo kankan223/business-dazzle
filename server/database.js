@@ -454,8 +454,13 @@ async function checkDatabaseHealth() {
       return { status: 'disconnected', error: 'Database not initialized' };
     }
     
-    // Ping the database
-    await db.admin().ping();
+    // Ping the database - check if it's MongoDB (has admin method)
+    if (db.admin && typeof db.admin === 'function') {
+      await db.admin().ping();
+    } else {
+      // In-memory fallback is always "healthy"
+      return { status: 'healthy', timestamp: new Date(), type: 'in-memory' };
+    }
     return { status: 'healthy', timestamp: new Date() };
   } catch (error) {
     return { status: 'unhealthy', error: error.message, timestamp: new Date() };

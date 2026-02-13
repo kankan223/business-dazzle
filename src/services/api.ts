@@ -123,16 +123,14 @@ class WebSocketService {
         });
 
         this.socket.on('connect', () => {
-          console.log('🔌 Connected to server WebSocket');
           resolve();
         });
 
         this.socket.on('disconnect', () => {
-          console.log('🔌 Disconnected from server WebSocket');
+          // Handle disconnect
         });
 
         this.socket.on('connect_error', (error) => {
-          console.error('🔌 WebSocket connection error:', error);
           reject(error);
         });
 
