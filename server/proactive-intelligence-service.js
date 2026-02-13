@@ -285,7 +285,7 @@ class ProactiveIntelligenceService {
           return await this.checkOverduePayments(trigger);
           
         case 'pending_payments':
-          return await this.checkPendingPayments(trigger);
+          return await this.checkPendingApprovals(trigger);
           
         case 'low_stock':
           return await this.checkLowStock(trigger);
@@ -424,34 +424,6 @@ class ProactiveIntelligenceService {
         
       default:
         return { should_nudge: false };
-    }
-  }
-
-  // Check overdue payments
-  async checkOverduePayments(trigger) {
-    try {
-      // Mock implementation for now
-      const overduePayments = [
-        { id: 1, name: 'Rahul', amount: 2500, days_overdue: 35, phone: '+919876543210' },
-        { id: 2, name: 'Amit', amount: 1800, days_overdue: 42, phone: '+919876543211' }
-      ];
-      
-      if (overduePayments.length > 0) {
-        return {
-          triggered: true,
-          action: trigger.action,
-          data: {
-            customers: overduePayments,
-            count: overduePayments.length,
-            total_amount: overduePayments.reduce((sum, p) => sum + p.amount, 0)
-          }
-        };
-      }
-      
-      return { triggered: false };
-    } catch (error) {
-      console.error('Check overdue payments error:', error);
-      return { triggered: false, error: error.message };
     }
   }
 
@@ -598,6 +570,20 @@ class ProactiveIntelligenceService {
     }
   }
 
+  // Execute customer re-engagement action
+  async executeCustomerReEngagement(data) {
+    for (const customer of data.customers) {
+      const message = this.generateReEngagementMessage(customer);
+      
+      // Send via WhatsApp/Telegram
+      await this.sendProactiveMessage(customer.phone, message, {
+        type: 'customer_re_engagement',
+        customer_id: customer.id,
+        priority: 'medium'
+      });
+    }
+  }
+
   // Execute payment reminder action
   async executePaymentReminderAction(data) {
     for (const customer of data.customers) {
@@ -610,6 +596,22 @@ class ProactiveIntelligenceService {
         urgent: customer.days_overdue > 21
       });
     }
+  }
+
+  // Generate re-engagement message (Indian context)
+  generateReEngagementMessage(customer) {
+    const templates = {
+      30: '🌟 Namaste {name}! Hum aapko miss kiye. Kya aapka next order ready hai? Special discount available! 🎉',
+      60: '💫 Hello {name}! Long time no order. New arrivals stock mein hain. Check kijiye!',
+      90: '🎯 {name} ji! Aapke liye special offer hai. Next order pe extra discount milega.'
+    };
+    
+    const daysInactive = customer.days_inactive || 30;
+    const template = templates[daysInactive] || templates[30];
+    
+    return template
+      .replace('{name}', customer.name || 'Customer')
+      .replace('{days}', daysInactive);
   }
 
   // Generate payment reminder message (Indian context)

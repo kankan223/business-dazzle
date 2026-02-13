@@ -71,14 +71,14 @@ class IntentProcessor {
   // Main intent processing method
   async processMessage(message, customerInfo, conversationHistory = []) {
     try {
-      console.log(`🎯 Processing intent for: ${message}`);
+      // Processing intent
       
       // STEP 1: Process with Indian Language Processor first
       const indianContext = indianLanguageProcessor.processIndianText(message);
       
       // STEP 2: If high confidence in Indian context, use it directly
       if (indianContext.confidence > 0.3) {
-        console.log('🇮🇳 Using Indian language context:', indianContext);
+        // Using Indian language context
         
         // Enhance with business rules
         const enhancedIntent = await this.validateAndEnhanceIntent(indianContext, customerInfo);
@@ -105,7 +105,7 @@ class IntentProcessor {
       }
       
       // STEP 3: Fallback to AI analysis if Indian context is unclear
-      console.log('🤖 Falling back to AI analysis');
+      // Falling back to AI analysis
       const aiAnalysis = await this.extractIntentWithAI(message, customerInfo, conversationHistory);
       
       // Validate and enhance intent

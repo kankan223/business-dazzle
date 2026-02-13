@@ -48,17 +48,17 @@ class SearchService {
               this.indexDocument(collectionName, doc);
             });
             
-            console.log(`📚 Indexed ${documents.length} documents from ${collectionName}`);
+            // Indexed documents from collection
             totalIndexed += documents.length;
           } else {
-            console.log(`📚 No documents found in ${collectionName}`);
+            // No documents found in collection
           }
         } catch (error) {
           console.warn(`Failed to index ${collectionName}:`, error.message);
         }
       }
       
-      console.log(`✅ Search index initialized with ${totalIndexed} total documents`);
+      // Search index initialized
     } catch (error) {
       console.error('❌ Failed to initialize search index:', error);
     }
@@ -357,10 +357,10 @@ class SearchService {
    * Rebuild search index
    */
   async rebuildIndex() {
-    console.log('🔄 Rebuilding search index...');
+    // Rebuilding search index
     this.searchIndex.clear();
     await this.initializeSearchIndex();
-    console.log('✅ Search index rebuilt');
+    // Search index rebuilt
   }
 
   /**

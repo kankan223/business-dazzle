@@ -31,7 +31,7 @@ const COLLECTIONS = {
 let inMemoryDb = new Map();
 
 function createInMemoryFallback() {
-  console.log('🗄️ Creating in-memory database fallback');
+  // Creating in-memory database fallback
   return {
     collection: (name) => ({
       find: (query = {}) => ({
@@ -101,7 +101,7 @@ function createInMemoryFallback() {
 }
 
 async function initializeDefaultData() {
-  console.log('🔧 Initializing default data in memory database');
+  // Initializing default data in memory database
   
   // Initialize with some default data
   const defaultUsers = [
@@ -123,13 +123,13 @@ async function initializeDefaultData() {
   inMemoryDb.set('conversations', []);
   inMemoryDb.set('inventory', []);
   
-  console.log('✅ Default data initialized');
+  // Default data initialized
 }
 
 // Connect to MongoDB (optional)
 async function connectDatabase() {
   if (process.env.SKIP_DATABASE === 'true') {
-    console.log('⚠️ Database connection skipped (SKIP_DATABASE=true)');
+    // Database connection skipped
     return;
   }
 
@@ -139,7 +139,7 @@ async function connectDatabase() {
 
   while (attempt < maxRetries) {
     try {
-      console.log(`🔗 Attempting to connect to MongoDB (attempt ${attempt + 1}/${maxRetries})...`);
+      // Attempting to connect to MongoDB
       
       client = new MongoClient(MONGODB_URI, {
         serverSelectionTimeoutMS: 10000, // Increased timeout
@@ -158,7 +158,7 @@ async function connectDatabase() {
       
       // Test the connection
       await db.admin().ping();
-      console.log('✅ Connected to MongoDB:', DB_NAME);
+      // Connected to MongoDB
       
       // Set up connection monitoring
       client.on('serverHeartbeatFailed', (event) => {
@@ -166,7 +166,7 @@ async function connectDatabase() {
       });
       
       client.on('serverOpening', (event) => {
-        console.log('🔗 MongoDB server opening:', event.address);
+        // MongoDB server opening
       });
       
       client.on('serverClosed', (event) => {
@@ -184,12 +184,12 @@ async function connectDatabase() {
         break;
       }
       
-      console.log(`⏳ Retrying in ${retryDelay / 1000} seconds...`);
+      // Retrying connection
       await new Promise(resolve => setTimeout(resolve, retryDelay));
     }
   }
 
-  console.log('⚠️ Using in-memory fallback database (data will be lost on restart)');
+  // Using in-memory fallback database
   
   // Initialize in-memory fallback
   db = createInMemoryFallback();
@@ -372,7 +372,7 @@ async function createIndexes() {
       await db.collection(COLLECTIONS.INVENTORY).createIndex({ sku: 1 }, { unique: true });
       await db.collection(COLLECTIONS.INVENTORY).createIndex({ name: 1 });
       
-      console.log('✅ Database indexes created successfully');
+      // Database indexes created
     }
   } catch (error) {
     console.error('❌ Error creating indexes:', error);
@@ -420,7 +420,7 @@ async function initializeDefaultData() {
         createdAt: new Date()
       });
       
-      console.log('✅ Default data initialized');
+      // Default data initialized
     }
   } catch (error) {
     console.error('❌ Error initializing default data:', error);
@@ -440,7 +440,7 @@ async function closeDatabase() {
   try {
     if (client) {
       await client.close();
-      console.log('✅ Database connection closed');
+      // Database connection closed
     }
   } catch (error) {
     console.error('❌ Error closing database:', error.message);

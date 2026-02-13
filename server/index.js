@@ -60,7 +60,6 @@ const proactiveIntelligenceService = require('./proactive-intelligence-service')
 const lowBandwidthService = require('./low-bandwidth-service');
 const whatsappFirstRouter = require('./whatsapp-first-router');
 const SpeechToTextService = require('./speech-service');
-const AIService = require('./ai-service');
 const VoiceService = require('./voice-server');
 const InvoiceService = require('./invoice-service');
 const { securityHeaders, validate, sanitizeInput, logSecurityEvent, schemas: validationSchemas, privacyControls } = require('./security-middleware');
@@ -4537,7 +4536,7 @@ app.post('/api/ai/process', authenticateApiKey, async (req, res) => {
       });
     }
     
-    const response = await aiService.processCustomerMessage(message, context, customerInfo);
+    const response = await simpleAIService.processCustomerMessage(message, context, customerInfo);
     
     res.json({ 
       success: true, 
@@ -6210,6 +6209,15 @@ if (process.env.NODE_ENV === 'test') {
 
 async function startServer() {
   try {
+    // Validate required environment variables
+    const requiredEnvVars = ['TELEGRAM_BOT_TOKEN'];
+    const missingVars = requiredEnvVars.filter(varName => !process.env[varName] || process.env[varName] === 'your_telegram_bot_token_here');
+    
+    if (missingVars.length > 0) {
+      console.warn(`⚠️ Optional environment variables not configured: ${missingVars.join(', ')}`);
+      console.log('📝 Some features may be limited');
+    }
+
     // Try to connect to database (optional)
     try {
       await connectDatabase();
